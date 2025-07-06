@@ -1,7 +1,9 @@
 package org.apache.knox.mcp;
 
 import org.apache.knox.mcp.client.McpJsonRpcClient;
-import org.apache.knox.mcp.client.McpHttpSseClient;
+import org.apache.knox.mcp.client.McpHttpClient;
+import org.apache.knox.mcp.client.McpSseClient;
+import org.apache.knox.mcp.client.McpCustomHttpSseClient;
 import org.apache.knox.mcp.client.McpTool;
 import org.apache.knox.mcp.client.McpResource;
 import org.apache.knox.mcp.client.McpException;
@@ -17,10 +19,16 @@ public class McpServerConnection {
     private final String name;
     private final String endpoint;
     private McpJsonRpcClient stdioClient;
-    private McpHttpSseClient httpClient;
+    private McpHttpClient httpClient;
+    private McpSseClient sseClient;
+    private McpCustomHttpSseClient customHttpSseClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private boolean connected = false;
-    private boolean isHttpTransport = false;
+    private TransportType transportType = TransportType.STDIO;
+    
+    private enum TransportType {
+        STDIO, HTTP, SSE, CUSTOM_HTTP_SSE
+    }
     
     private final Map<String, Object> cachedTools = new ConcurrentHashMap<>();
     private final Map<String, Object> cachedResources = new ConcurrentHashMap<>();
@@ -40,9 +48,13 @@ public class McpServerConnection {
                 connectStdio();
             } else if (endpoint.startsWith("http://") || endpoint.startsWith("https://")) {
                 connectHttp();
+            } else if (endpoint.startsWith("sse://") || endpoint.startsWith("sses://")) {
+                connectSse();
+            } else if (endpoint.startsWith("custom-http-sse://") || endpoint.startsWith("custom-https-sse://")) {
+                connectCustomHttpSse();
             } else {
                 throw new IllegalArgumentException("Unsupported endpoint type: " + endpoint + 
-                    ". Supported types: stdio://, http://, https://");
+                    ". Supported types: stdio://, http://, https://, sse://, sses://, custom-http-sse://, custom-https-sse://");
             }
             
             // Discover tools and resources
@@ -74,18 +86,46 @@ public class McpServerConnection {
         // Initialize the connection with capabilities
         JsonNode clientCapabilities = objectMapper.createObjectNode();
         stdioClient.initialize(clientCapabilities);
-        isHttpTransport = false;
+        transportType = TransportType.STDIO;
     }
     
     private void connectHttp() throws Exception {
-        // Create and initialize the HTTP/SSE MCP client
-        httpClient = new McpHttpSseClient(endpoint);
+        // Create and initialize the standard HTTP MCP client
+        httpClient = new McpHttpClient(endpoint);
         httpClient.connect();
         
         // Initialize the connection with capabilities
         JsonNode clientCapabilities = objectMapper.createObjectNode();
         httpClient.initialize(clientCapabilities);
-        isHttpTransport = true;
+        transportType = TransportType.HTTP;
+    }
+    
+    private void connectSse() throws Exception {
+        // Convert sse:// to http:// for the actual connection
+        String httpUrl = endpoint.replace("sse://", "http://").replace("sses://", "https://");
+        
+        // Create and initialize the standard SSE MCP client
+        sseClient = new McpSseClient(httpUrl);
+        sseClient.connect();
+        
+        // Initialize the connection with capabilities
+        JsonNode clientCapabilities = objectMapper.createObjectNode();
+        sseClient.initialize(clientCapabilities);
+        transportType = TransportType.SSE;
+    }
+    
+    private void connectCustomHttpSse() throws Exception {
+        // Convert custom-http-sse:// to http:// for the actual connection
+        String httpUrl = endpoint.replace("custom-http-sse://", "http://").replace("custom-https-sse://", "https://");
+        
+        // Create and initialize the custom HTTP/SSE MCP client
+        customHttpSseClient = new McpCustomHttpSseClient(httpUrl);
+        customHttpSseClient.connect();
+        
+        // Initialize the connection with capabilities
+        JsonNode clientCapabilities = objectMapper.createObjectNode();
+        customHttpSseClient.initialize(clientCapabilities);
+        transportType = TransportType.CUSTOM_HTTP_SSE;
     }
     
     private void cleanup() {
@@ -101,6 +141,20 @@ public class McpServerConnection {
                 httpClient.close();
             } catch (Exception cleanupException) {
                 System.err.println("Failed to cleanup HTTP client for server: " + name);
+            }
+        }
+        if (sseClient != null) {
+            try {
+                sseClient.close();
+            } catch (Exception cleanupException) {
+                System.err.println("Failed to cleanup SSE client for server: " + name);
+            }
+        }
+        if (customHttpSseClient != null) {
+            try {
+                customHttpSseClient.close();
+            } catch (Exception cleanupException) {
+                System.err.println("Failed to cleanup custom HTTP/SSE client for server: " + name);
             }
         }
     }
@@ -135,10 +189,21 @@ public class McpServerConnection {
 
         try {
             JsonNode result;
-            if (isHttpTransport) {
-                result = httpClient.callTool(toolName, parameters);
-            } else {
-                result = stdioClient.callTool(toolName, parameters);
+            switch (transportType) {
+                case STDIO:
+                    result = stdioClient.callTool(toolName, parameters);
+                    break;
+                case HTTP:
+                    result = httpClient.callTool(toolName, parameters);
+                    break;
+                case SSE:
+                    result = sseClient.callTool(toolName, parameters);
+                    break;
+                case CUSTOM_HTTP_SSE:
+                    result = customHttpSseClient.callTool(toolName, parameters);
+                    break;
+                default:
+                    throw new IllegalStateException("Unknown transport type: " + transportType);
             }
             System.out.println("Called tool: " + toolName + " on server: " + name);
             return objectMapper.convertValue(result, Object.class);
@@ -154,10 +219,21 @@ public class McpServerConnection {
 
         try {
             JsonNode result;
-            if (isHttpTransport) {
-                result = httpClient.readResource(resourceName);
-            } else {
-                result = stdioClient.readResource(resourceName);
+            switch (transportType) {
+                case STDIO:
+                    result = stdioClient.readResource(resourceName);
+                    break;
+                case HTTP:
+                    result = httpClient.readResource(resourceName);
+                    break;
+                case SSE:
+                    result = sseClient.readResource(resourceName);
+                    break;
+                case CUSTOM_HTTP_SSE:
+                    result = customHttpSseClient.readResource(resourceName);
+                    break;
+                default:
+                    throw new IllegalStateException("Unknown transport type: " + transportType);
             }
             System.out.println("Read resource: " + resourceName + " from server: " + name);
             return objectMapper.convertValue(result, Object.class);
@@ -171,12 +247,25 @@ public class McpServerConnection {
             List<McpTool> tools;
             List<McpResource> resources;
             
-            if (isHttpTransport) {
-                tools = httpClient.listTools();
-                resources = httpClient.listResources();
-            } else {
-                tools = stdioClient.listTools();
-                resources = stdioClient.listResources();
+            switch (transportType) {
+                case STDIO:
+                    tools = stdioClient.listTools();
+                    resources = stdioClient.listResources();
+                    break;
+                case HTTP:
+                    tools = httpClient.listTools();
+                    resources = httpClient.listResources();
+                    break;
+                case SSE:
+                    tools = sseClient.listTools();
+                    resources = sseClient.listResources();
+                    break;
+                case CUSTOM_HTTP_SSE:
+                    tools = customHttpSseClient.listTools();
+                    resources = customHttpSseClient.listResources();
+                    break;
+                default:
+                    throw new IllegalStateException("Unknown transport type: " + transportType);
             }
             
             // Refresh tools

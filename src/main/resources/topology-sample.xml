@@ -26,9 +26,10 @@
             <name>mcp.servers</name>
             <value>calculator:stdio://python /path/to/calculator_server.py,
                    filesystem:stdio://python /path/to/filesystem_server.py,
-                   database:stdio://python /path/to/database_server.py,
                    webapi:http://localhost:3000,
-                   cloudservice:https://api.example.com/mcp</value>
+                   cloudservice:https://api.example.com/mcp,
+                   realtime:sse://localhost:4000,
+                   gateway:custom-http-sse://localhost:5000</value>
         </param>
         <param>
             <name>mcp.bind.address</name>

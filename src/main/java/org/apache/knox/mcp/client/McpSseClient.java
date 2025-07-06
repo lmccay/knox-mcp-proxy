@@ -6,15 +6,16 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.apache.http.HttpResponse;
 import org.apache.http.client.HttpClient;
 import org.apache.http.client.methods.HttpGet;
-import org.apache.http.client.methods.HttpPost;
-import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.client.HttpClients;
-import org.apache.http.util.EntityUtils;
 
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
+import java.net.HttpURLConnection;
 import java.net.URI;
+import java.net.URL;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -24,9 +25,10 @@ import java.util.List;
 import java.util.ArrayList;
 
 /**
- * MCP client implementation using HTTP with Server-Sent Events
+ * Standard SSE MCP client implementation - bidirectional communication over 
+ * a single Server-Sent Events connection, compatible with standard MCP SSE servers.
  */
-public class McpHttpSseClient implements AutoCloseable {
+public class McpSseClient implements AutoCloseable {
     
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final AtomicLong requestIdCounter = new AtomicLong(1);
@@ -36,15 +38,17 @@ public class McpHttpSseClient implements AutoCloseable {
     private final String baseUrl;
     private final String sseEndpoint;
     private Thread sseReaderThread;
+    private HttpURLConnection sseConnection;
+    private PrintWriter sseWriter;
     private volatile boolean closed = false;
     
     private String serverName;
     private JsonNode serverCapabilities;
     
-    public McpHttpSseClient(String baseUrl) {
+    public McpSseClient(String baseUrl) {
         this.httpClient = HttpClients.createDefault();
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
-        this.sseEndpoint = this.baseUrl + "/sse";
+        this.sseEndpoint = this.baseUrl;
         this.serverName = extractServerName(baseUrl);
     }
     
@@ -55,43 +59,49 @@ public class McpHttpSseClient implements AutoCloseable {
             int port = uri.getPort();
             return host + (port != -1 ? ":" + port : "");
         } catch (Exception e) {
-            return "http-server";
+            return "sse-server";
         }
     }
     
     public void connect() throws IOException {
+        establishSseConnection();
         startSseListener();
+    }
+    
+    private void establishSseConnection() throws IOException {
+        URL url = new URL(sseEndpoint);
+        sseConnection = (HttpURLConnection) url.openConnection();
+        sseConnection.setRequestMethod("GET");
+        sseConnection.setRequestProperty("Accept", "text/event-stream");
+        sseConnection.setRequestProperty("Cache-Control", "no-cache");
+        sseConnection.setDoOutput(true);
+        sseConnection.setDoInput(true);
+        
+        int responseCode = sseConnection.getResponseCode();
+        if (responseCode != 200) {
+            throw new IOException("Failed to establish SSE connection: " + responseCode);
+        }
+        
+        // For bidirectional SSE, we need an output stream to send messages
+        sseWriter = new PrintWriter(new OutputStreamWriter(sseConnection.getOutputStream(), "UTF-8"), true);
     }
     
     private void startSseListener() throws IOException {
         sseReaderThread = new Thread(() -> {
-            try {
-                HttpGet sseRequest = new HttpGet(sseEndpoint);
-                sseRequest.setHeader("Accept", "text/event-stream");
-                sseRequest.setHeader("Cache-Control", "no-cache");
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(sseConnection.getInputStream(), "UTF-8"))) {
                 
-                HttpResponse response = httpClient.execute(sseRequest);
+                String line;
+                StringBuilder eventData = new StringBuilder();
                 
-                if (response.getStatusLine().getStatusCode() != 200) {
-                    throw new IOException("Failed to connect to SSE endpoint: " + 
-                        response.getStatusLine().getStatusCode());
-                }
-                
-                try (BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(response.getEntity().getContent()))) {
-                    
-                    String line;
-                    StringBuilder eventData = new StringBuilder();
-                    
-                    while (!closed && (line = reader.readLine()) != null) {
-                        if (line.startsWith("data: ")) {
-                            String data = line.substring(6);
-                            eventData.append(data);
-                        } else if (line.isEmpty() && eventData.length() > 0) {
-                            // End of event, process the data
-                            handleSseMessage(eventData.toString());
-                            eventData.setLength(0);
-                        }
+                while (!closed && (line = reader.readLine()) != null) {
+                    if (line.startsWith("data: ")) {
+                        String data = line.substring(6);
+                        eventData.append(data);
+                    } else if (line.isEmpty() && eventData.length() > 0) {
+                        // End of event, process the data
+                        handleSseMessage(eventData.toString());
+                        eventData.setLength(0);
                     }
                 }
             } catch (IOException e) {
@@ -140,7 +150,13 @@ public class McpHttpSseClient implements AutoCloseable {
         }
     }
     
-    private CompletableFuture<JsonNode> sendHttpRequest(String method, JsonNode params) {
+    private CompletableFuture<JsonNode> sendSseRequest(String method, JsonNode params) {
+        if (closed || sseWriter == null) {
+            CompletableFuture<JsonNode> future = new CompletableFuture<>();
+            future.completeExceptionally(new IllegalStateException("SSE connection is closed"));
+            return future;
+        }
+        
         long id = requestIdCounter.getAndIncrement();
         
         ObjectNode request = objectMapper.createObjectNode();
@@ -154,33 +170,23 @@ public class McpHttpSseClient implements AutoCloseable {
         CompletableFuture<JsonNode> future = new CompletableFuture<>();
         pendingRequests.put(id, future);
         
-        // Send request via HTTP POST in background
-        CompletableFuture.runAsync(() -> {
-            try {
-                HttpPost httpPost = new HttpPost(baseUrl + "/message");
-                httpPost.setHeader("Content-Type", "application/json");
-                
-                String requestJson = objectMapper.writeValueAsString(request);
-                httpPost.setEntity(new StringEntity(requestJson));
-                
-                HttpResponse response = httpClient.execute(httpPost);
-                int statusCode = response.getStatusLine().getStatusCode();
-                
-                if (statusCode != 200 && statusCode != 202) {
-                    pendingRequests.remove(id);
-                    future.completeExceptionally(new IOException(
-                        "HTTP request failed with status: " + statusCode));
-                }
-                
-                // For HTTP/SSE, we don't expect immediate response body
-                // Response will come via SSE channel
-                EntityUtils.consume(response.getEntity());
-                
-            } catch (Exception e) {
+        try {
+            String requestJson = objectMapper.writeValueAsString(request);
+            
+            // Send as SSE data format
+            sseWriter.println("data: " + requestJson);
+            sseWriter.println(); // Empty line to end the event
+            sseWriter.flush();
+            
+            if (sseWriter.checkError()) {
                 pendingRequests.remove(id);
-                future.completeExceptionally(e);
+                future.completeExceptionally(new IOException("Failed to write to SSE connection"));
             }
-        });
+            
+        } catch (Exception e) {
+            pendingRequests.remove(id);
+            future.completeExceptionally(e);
+        }
         
         return future;
     }
@@ -191,7 +197,7 @@ public class McpHttpSseClient implements AutoCloseable {
         params.set("capabilities", clientCapabilities != null ? clientCapabilities : objectMapper.createObjectNode());
         params.set("clientInfo", createClientInfo());
         
-        JsonNode result = sendHttpRequest("initialize", params).get(10, TimeUnit.SECONDS);
+        JsonNode result = sendSseRequest("initialize", params).get(10, TimeUnit.SECONDS);
         if (result != null && result.has("capabilities")) {
             this.serverCapabilities = result.get("capabilities");
         }
@@ -206,7 +212,7 @@ public class McpHttpSseClient implements AutoCloseable {
     }
     
     public List<McpTool> listTools() throws Exception {
-        JsonNode result = sendHttpRequest("tools/list", null).get(10, TimeUnit.SECONDS);
+        JsonNode result = sendSseRequest("tools/list", null).get(10, TimeUnit.SECONDS);
         List<McpTool> tools = new ArrayList<>();
         
         if (result != null && result.has("tools")) {
@@ -229,11 +235,11 @@ public class McpHttpSseClient implements AutoCloseable {
             params.set("arguments", objectMapper.valueToTree(arguments));
         }
         
-        return sendHttpRequest("tools/call", params).get(30, TimeUnit.SECONDS);
+        return sendSseRequest("tools/call", params).get(30, TimeUnit.SECONDS);
     }
     
     public List<McpResource> listResources() throws Exception {
-        JsonNode result = sendHttpRequest("resources/list", null).get(10, TimeUnit.SECONDS);
+        JsonNode result = sendSseRequest("resources/list", null).get(10, TimeUnit.SECONDS);
         List<McpResource> resources = new ArrayList<>();
         
         if (result != null && result.has("resources")) {
@@ -254,7 +260,7 @@ public class McpHttpSseClient implements AutoCloseable {
         ObjectNode params = objectMapper.createObjectNode();
         params.put("uri", uri);
         
-        return sendHttpRequest("resources/read", params).get(10, TimeUnit.SECONDS);
+        return sendSseRequest("resources/read", params).get(10, TimeUnit.SECONDS);
     }
     
     @Override
@@ -267,9 +273,19 @@ public class McpHttpSseClient implements AutoCloseable {
         }
         pendingRequests.clear();
         
+        // Close writer
+        if (sseWriter != null) {
+            sseWriter.close();
+        }
+        
         // Interrupt SSE reader thread
         if (sseReaderThread != null) {
             sseReaderThread.interrupt();
+        }
+        
+        // Close SSE connection
+        if (sseConnection != null) {
+            sseConnection.disconnect();
         }
         
         // Close HTTP client if it's a CloseableHttpClient

@@ -6,7 +6,7 @@ The Knox MCP Proxy provides a complete Java 8 compatible implementation of the M
 
 ## Key Components
 
-### 1. Custom MCP JSON-RPC Clients
+### 1. Multiple MCP Transport Clients
 
 **Stdio Client (`McpJsonRpcClient`):**
 - **JSON-RPC 2.0 Protocol**: Full implementation of MCP protocol over stdio
@@ -14,11 +14,23 @@ The Knox MCP Proxy provides a complete Java 8 compatible implementation of the M
 - **Asynchronous Communication**: Uses CompletableFuture for non-blocking operations
 - **Message Routing**: Correlates requests with responses using message IDs
 
-**HTTP/SSE Client (`McpHttpSseClient`):**
-- **HTTP Transport**: Sends JSON-RPC requests via HTTP POST to `/message` endpoint
-- **Server-Sent Events**: Receives responses via SSE from `/sse` endpoint
-- **Multi-client Support**: Better suited for web-based MCP servers
-- **Connection Management**: Maintains persistent SSE connection for real-time responses
+**Standard HTTP Client (`McpHttpClient`):**
+- **HTTP Request/Response**: Standard HTTP POST with JSON-RPC in request/response body
+- **Stateless**: Each request is independent, no persistent connections
+- **Compatible**: Works with standard MCP HTTP servers out-of-the-box
+- **Simple**: Direct request/response pattern
+
+**Standard SSE Client (`McpSseClient`):**
+- **Bidirectional SSE**: Both requests and responses over single SSE connection
+- **Persistent Connection**: Maintains long-lived connection for real-time communication
+- **Compatible**: Works with standard MCP SSE servers
+- **Event-driven**: Server can push notifications and responses
+
+**Custom HTTP+SSE Client (`McpCustomHttpSseClient`):**
+- **Hybrid Transport**: HTTP POST for requests, SSE for responses
+- **Knox-optimized**: Designed for gateway scenarios with multiple clients
+- **Message Correlation**: Uses request IDs to match HTTP requests with SSE responses
+- **Gateway-friendly**: Optimized for proxy/aggregation use cases
 
 **Technical Details:**
 ```java
@@ -27,12 +39,23 @@ ProcessBuilder pb = new ProcessBuilder();
 pb.command("python", "/path/to/mcp_server.py");
 Process mcpProcess = pb.start();
 
-// HTTP/SSE transport - Request via HTTP, response via SSE
-HttpPost request = new HttpPost(baseUrl + "/message");
+// Standard HTTP transport - Request and response in same connection
+HttpPost request = new HttpPost(baseUrl);
 request.setEntity(new StringEntity(jsonRpcMessage));
 HttpResponse response = httpClient.execute(request);
+JsonNode result = parseResponse(response);
 
-// JSON-RPC message format (same for both transports)
+// Standard SSE transport - Bidirectional over SSE
+sseConnection.getOutputStream().write(jsonRpcMessage);
+JsonNode response = readFromSSE(sseConnection);
+
+// Custom HTTP+SSE transport - Request via HTTP, response via SSE
+HttpPost request = new HttpPost(baseUrl + "/message");
+request.setEntity(new StringEntity(jsonRpcMessage));
+httpClient.execute(request); // Fire and forget
+JsonNode response = readFromSSE("/sse"); // Response comes via SSE
+
+// JSON-RPC message format (same for all transports)
 {
   "jsonrpc": "2.0",
   "id": 123,
@@ -70,14 +93,16 @@ HttpResponse response = httpClient.execute(request);
 ### 4. Connection Management
 
 **Lifecycle:**
-1. **Connect**: Parse endpoint (stdio:// or http://), establish connection, initialize MCP
+1. **Connect**: Parse endpoint (stdio://, http://, sse://, custom-http-sse://), establish connection, initialize MCP
 2. **Discover**: List tools and resources, cache results
-3. **Execute**: Route tool calls and resource requests
+3. **Execute**: Route tool calls and resource requests via appropriate transport
 4. **Disconnect**: Gracefully close connection and cleanup
 
 **Error Handling:**
 - Process failures (exit codes, crashes) for stdio transport
-- HTTP connection failures and timeouts for HTTP/SSE transport
+- HTTP connection failures and timeouts for HTTP transport
+- SSE connection issues and reconnection for SSE transport
+- Custom transport-specific error handling
 - JSON-RPC errors (method not found, invalid params)
 - Timeout handling for unresponsive servers
 - Resource cleanup on failure
@@ -142,11 +167,12 @@ POST /mcp/v1/tools/webapi.search {"query": "example"}
 |---------|------------------|----------------|
 | Java Version | Java 17+ | Java 8+ |
 | Protocol | JSON-RPC 2.0 | JSON-RPC 2.0 |
-| Transport | stdio, SSE, HTTP | stdio, HTTP/SSE |
+| Transport | stdio, SSE, HTTP | stdio, HTTP, SSE, custom HTTP+SSE |
 | Dependencies | Multiple | Jackson, Apache HttpClient |
 | Knox Integration | None | Native |
 | Process Management | External | Built-in |
-| Multi-client Support | Limited | Full HTTP/SSE support |
+| Standard Compatibility | Full | Full (all standard transports) |
+| Gateway Optimization | None | Custom HTTP+SSE transport |
 
 ## Future Enhancements
 

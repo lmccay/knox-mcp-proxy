@@ -58,9 +58,13 @@ Add the MCP proxy service to your Knox topology:
 
 - `mcp.servers`: Comma-separated list of `name:endpoint` pairs for MCP servers
   - Supported endpoint formats:
-    - `stdio://command args` - for subprocess-based MCP servers
-    - `http://host:port` - for HTTP/SSE-based MCP servers
-    - `https://host:port` - for secure HTTP/SSE-based MCP servers
+    - `stdio://command args` - for subprocess-based MCP servers  
+    - `http://host:port` - for standard HTTP request/response MCP servers
+    - `https://host:port` - for secure standard HTTP MCP servers
+    - `sse://host:port` - for standard SSE bidirectional MCP servers
+    - `sses://host:port` - for secure standard SSE MCP servers
+    - `custom-http-sse://host:port` - for Knox custom HTTP+SSE transport
+    - `custom-https-sse://host:port` - for secure Knox custom HTTP+SSE transport
 
 ## API Endpoints
 
@@ -204,9 +208,14 @@ To add new MCP transport types:
 - Proper Java 8 compatibility
 
 🎉 **MCP Implementation Details:**
-- **Dual transport clients**: `McpJsonRpcClient` for stdio, `McpHttpSseClient` for HTTP/SSE
+- **Multiple transport clients**: 
+  - `McpJsonRpcClient` - stdio subprocess communication
+  - `McpHttpClient` - standard HTTP request/response  
+  - `McpSseClient` - standard SSE bidirectional communication
+  - `McpCustomHttpSseClient` - Knox custom HTTP+SSE transport
 - **Process management** for stdio-based MCP servers (Python, Node.js, etc.)
-- **HTTP/SSE communication** for web-based MCP servers with persistent connections
+- **Standard HTTP/SSE support** for full compatibility with existing MCP servers
+- **Custom transport** optimized for Knox gateway scenarios
 - **Asynchronous message handling** with CompletableFuture
 - **Real tool discovery** and execution via MCP protocol
 - **Resource enumeration** and content access
@@ -214,8 +223,9 @@ To add new MCP transport types:
 - **Error handling** for MCP protocol errors, process failures, and HTTP timeouts
 
 **Features:**
-- Connects to actual MCP servers via `stdio://python mcp_server.py` or `http://localhost:3000`
-- Supports both subprocess and HTTP/SSE transports
+- **Full transport compatibility**: stdio, HTTP, SSE, and custom HTTP+SSE  
+- Connects to any MCP server: `stdio://python server.py`, `http://localhost:3000`, `sse://localhost:4000`
+- **Standard MCP compliance**: Works with official MCP servers out-of-the-box
 - Discovers real tools and resources from servers
 - Executes actual tool calls with parameters
 - Reads actual resource content
