@@ -1,8 +1,0 @@
-org/apache/knox/mcp/client/McpJsonRpcClient.class
-org/apache/knox/mcp/deploy/McpProxyServiceDeploymentContributor.class
-org/apache/knox/mcp/client/McpException.class
-org/apache/knox/mcp/client/McpTool.class
-org/apache/knox/mcp/McpProxyResource.class
-org/apache/knox/mcp/McpServerConnection.class
-org/apache/knox/mcp/client/McpHttpSseClient.class
-org/apache/knox/mcp/client/McpResource.class

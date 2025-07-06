@@ -1,8 +1,0 @@
-/Users/lmccay/Projects/mcpproxy/src/main/java/org/apache/knox/mcp/McpServerConnection.java
-/Users/lmccay/Projects/mcpproxy/src/main/java/org/apache/knox/mcp/client/McpResource.java
-/Users/lmccay/Projects/mcpproxy/src/main/java/org/apache/knox/mcp/McpProxyResource.java
-/Users/lmccay/Projects/mcpproxy/src/main/java/org/apache/knox/mcp/client/McpHttpSseClient.java
-/Users/lmccay/Projects/mcpproxy/src/main/java/org/apache/knox/mcp/client/McpJsonRpcClient.java
-/Users/lmccay/Projects/mcpproxy/src/main/java/org/apache/knox/mcp/client/McpException.java
-/Users/lmccay/Projects/mcpproxy/src/main/java/org/apache/knox/mcp/client/McpTool.java
-/Users/lmccay/Projects/mcpproxy/src/main/java/org/apache/knox/mcp/deploy/McpProxyServiceDeploymentContributor.java
