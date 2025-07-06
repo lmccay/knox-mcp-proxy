@@ -176,4 +176,4 @@ POST /mcp/v1/tools/webapi.search {"query": "example"}
 - **Authorization**: Role-based access to tools/resources
 - **Audit**: Log all MCP operations for compliance
 
-This implementation provides a complete, production-ready MCP proxy that integrates seamlessly with Apache Knox while maintaining Java 8 compatibility.
+This implementation provides a complete MCP proxy that integrates seamlessly with Apache Knox while maintaining Java 8 compatibility.
