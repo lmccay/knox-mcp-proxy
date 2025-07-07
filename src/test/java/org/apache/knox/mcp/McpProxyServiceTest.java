@@ -9,7 +9,6 @@ import org.mockito.MockitoAnnotations;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.ServletContext;
 import javax.ws.rs.core.Response;
-import java.util.Map;
 import java.util.HashMap;
 
 import static org.junit.jupiter.api.Assertions.*;

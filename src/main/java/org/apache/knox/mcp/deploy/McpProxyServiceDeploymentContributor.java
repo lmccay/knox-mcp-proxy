@@ -1,11 +1,9 @@
 package org.apache.knox.mcp.deploy;
 
-import org.apache.knox.gateway.deploy.DeploymentContext;
-import org.apache.knox.gateway.deploy.ServiceDeploymentContributor;
-import org.apache.knox.gateway.topology.Service;
+import org.apache.knox.gateway.jersey.JerseyServiceDeploymentContributorBase;
 import org.apache.knox.gateway.topology.Version;
 
-public class McpProxyServiceDeploymentContributor implements ServiceDeploymentContributor {
+public class McpProxyServiceDeploymentContributor extends JerseyServiceDeploymentContributorBase {
 
     private static final String ROLE = "MCPPROXY";
     private static final String NAME = "mcp";
@@ -25,19 +23,14 @@ public class McpProxyServiceDeploymentContributor implements ServiceDeploymentCo
         return new Version(1, 0, 0);
     }
 
+
     @Override
-    public void initializeContribution(DeploymentContext context) {
-        // No backend service initialization needed - all logic in resource class
+    protected String[] getPackages() {
+        return new String[]{ "org.apache.knox.mcp.client" };
     }
 
     @Override
-    public void contributeService(DeploymentContext context, Service service) throws Exception {
-        // TODO: Implement proper Knox service contribution
-        // For now, this is a placeholder to allow compilation
-    }
-
-    @Override
-    public void finalizeContribution(DeploymentContext context) {
-        // Any final setup can be done here
+    protected String[] getPatterns() {
+        return new String[]{ "mcp/v1/**?**" };
     }
 }

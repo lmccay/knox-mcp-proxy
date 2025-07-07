@@ -32,6 +32,11 @@
         </dependency>
         <dependency>
             <groupId>org.apache.knox</groupId>
+            <artifactId>gateway-provider-jersey</artifactId>
+            <version>${knox.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.knox</groupId>
             <artifactId>gateway-provider-security-shiro</artifactId>
             <version>${knox.version}</version>
         </dependency>

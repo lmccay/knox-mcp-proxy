@@ -6,7 +6,6 @@ import org.apache.knox.mcp.client.McpSseClient;
 import org.apache.knox.mcp.client.McpCustomHttpSseClient;
 import org.apache.knox.mcp.client.McpTool;
 import org.apache.knox.mcp.client.McpResource;
-import org.apache.knox.mcp.client.McpException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 

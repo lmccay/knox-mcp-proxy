@@ -13,7 +13,6 @@ import org.apache.http.util.EntityUtils;
 import java.io.IOException;
 import java.net.URI;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.TimeUnit;
 import java.util.Map;
 import java.util.List;
 import java.util.ArrayList;
