@@ -12,8 +12,6 @@ Knox MCP Proxy extends Apache Knox to serve as a central gateway for MCP ecosyst
 - **🚀 Multi-Server Aggregation**: Seamlessly combines tools and resources from multiple MCP servers
 - **🛡️ Knox Security Integration**: Leverages Knox's authentication, authorization, and security providers
 - **🏷️ Intelligent Namespacing**: Prevents tool/resource conflicts with server-prefixed names
-- **⚡ High Performance**: Java 8 compatible with asynchronous processing
-- **🔧 Production Ready**: Complete error handling, monitoring, and lifecycle management
 
 ## 🏗️ Architecture
 
