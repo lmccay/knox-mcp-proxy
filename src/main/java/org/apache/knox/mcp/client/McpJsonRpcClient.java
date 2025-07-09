@@ -38,15 +38,36 @@ public class McpJsonRpcClient implements AutoCloseable {
     }
     
     private String extractServerName(String command, String[] args) {
-        // Extract a meaningful name from command/args
+        // Extract a meaningful name from the command path
+        String baseName = command.substring(command.lastIndexOf('/') + 1);
+        
+        // Remove common file extensions
+        if (baseName.contains(".")) {
+            baseName = baseName.substring(0, baseName.lastIndexOf('.'));
+        }
+        
+        // If we have args, look for a --name or similar parameter
         if (args != null && args.length > 0) {
+            for (int i = 0; i < args.length - 1; i++) {
+                if (args[i].equals("--name") || args[i].equals("-n")) {
+                    return args[i + 1];
+                }
+            }
+            
+            // Look for config files that might indicate the server type
             for (String arg : args) {
-                if (arg.contains("calculator")) return "calculator";
-                if (arg.contains("filesystem")) return "filesystem"; 
-                if (arg.contains("database")) return "database";
+                if (arg.endsWith(".json") || arg.endsWith(".yaml") || arg.endsWith(".yml")) {
+                    String configName = arg.substring(arg.lastIndexOf('/') + 1);
+                    if (configName.contains(".")) {
+                        configName = configName.substring(0, configName.lastIndexOf('.'));
+                    }
+                    return configName;
+                }
             }
         }
-        return command.substring(command.lastIndexOf('/') + 1).replace(".py", "");
+        
+        // Return the base command name, or "mcp-server" if empty
+        return baseName.isEmpty() ? "mcp-server" : baseName;
     }
     
     private void startProcess(String command, String[] args) throws IOException {
