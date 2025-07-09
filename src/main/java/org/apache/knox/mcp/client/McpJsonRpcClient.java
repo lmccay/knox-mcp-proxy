@@ -71,6 +71,9 @@ public class McpJsonRpcClient implements AutoCloseable {
     }
     
     private void startProcess(String command, String[] args) throws IOException {
+        System.out.println("DEBUG: Starting MCP process - command: " + command + 
+                          ", args: " + (args != null ? java.util.Arrays.toString(args) : "null"));
+        
         ProcessBuilder pb = new ProcessBuilder();
         
         if (args != null && args.length > 0) {
@@ -78,52 +81,80 @@ public class McpJsonRpcClient implements AutoCloseable {
             fullCommand[0] = command;
             System.arraycopy(args, 0, fullCommand, 1, args.length);
             pb.command(fullCommand);
+            System.out.println("DEBUG: Full command: " + java.util.Arrays.toString(fullCommand));
         } else {
             pb.command(command.split("\\s+"));
+            System.out.println("DEBUG: Split command: " + java.util.Arrays.toString(command.split("\\s+")));
         }
         
         pb.redirectErrorStream(false);
         mcpProcess = pb.start();
         
+        System.out.println("DEBUG: MCP process started with PID: " + mcpProcess.hashCode() + 
+                          ", alive: " + mcpProcess.isAlive());
+        
         processInput = new BufferedWriter(new OutputStreamWriter(mcpProcess.getOutputStream()));
         processOutput = new BufferedReader(new InputStreamReader(mcpProcess.getInputStream()));
+        
+        System.out.println("DEBUG: Process streams established for server: " + serverName);
     }
     
     private void startReaderThread() {
         readerThread = new Thread(() -> {
+            System.out.println("DEBUG: Starting reader thread for server: " + serverName);
             try {
                 String line;
                 while (!closed && (line = processOutput.readLine()) != null) {
+                    System.out.println("DEBUG: Raw line from " + serverName + ": " + line);
                     handleIncomingMessage(line);
                 }
+                System.out.println("DEBUG: Reader thread ending for server: " + serverName + " (closed=" + closed + ")");
             } catch (IOException e) {
                 if (!closed) {
-                    System.err.println("Error reading from MCP process: " + e.getMessage());
+                    System.err.println("Error reading from MCP process " + serverName + ": " + e.getMessage());
+                    e.printStackTrace();
                 }
             }
         });
         readerThread.setDaemon(true);
         readerThread.start();
+        
+        // Give the process a moment to start up
+        try {
+            Thread.sleep(100);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        
+        System.out.println("DEBUG: Reader thread started for server: " + serverName);
     }
     
     private void handleIncomingMessage(String message) {
+        System.out.println("DEBUG: Received message from " + serverName + ": " + message);
+        
         try {
             JsonNode response = objectMapper.readTree(message);
             
             if (response.has("id") && !response.get("id").isNull()) {
                 // This is a response to a request
                 long id = response.get("id").asLong();
+                System.out.println("DEBUG: Processing response for ID: " + id);
+                
                 CompletableFuture<JsonNode> future = pendingRequests.remove(id);
                 if (future != null) {
                     if (response.has("error")) {
                         JsonNode error = response.get("error");
+                        System.err.println("ERROR: MCP server returned error for ID " + id + ": " + error);
                         future.completeExceptionally(new McpException(
                             error.get("code").asInt(),
                             error.get("message").asText()
                         ));
                     } else {
+                        System.out.println("DEBUG: Completing future for ID " + id + " with result");
                         future.complete(response.get("result"));
                     }
+                } else {
+                    System.err.println("WARNING: No pending request found for ID: " + id);
                 }
             } else {
                 // This is a notification - ignore for now
@@ -131,10 +162,13 @@ public class McpJsonRpcClient implements AutoCloseable {
             }
         } catch (Exception e) {
             System.err.println("Error parsing message from " + serverName + ": " + e.getMessage());
+            e.printStackTrace();
         }
     }
     
     private CompletableFuture<JsonNode> sendRequest(String method, JsonNode params) {
+        System.out.println("DEBUG: Sending request - method: " + method + ", server: " + serverName);
+        
         long id = requestIdCounter.getAndIncrement();
         
         ObjectNode request = objectMapper.createObjectNode();
@@ -150,12 +184,16 @@ public class McpJsonRpcClient implements AutoCloseable {
         
         try {
             String requestJson = objectMapper.writeValueAsString(request);
+            System.out.println("DEBUG: Sending JSON request: " + requestJson);
+            
             synchronized (processInput) {
                 processInput.write(requestJson);
                 processInput.newLine();
                 processInput.flush();
             }
+            System.out.println("DEBUG: Request sent successfully, waiting for response with ID: " + id);
         } catch (IOException e) {
+            System.err.println("ERROR: Failed to send request: " + e.getMessage());
             pendingRequests.remove(id);
             future.completeExceptionally(e);
         }
@@ -164,15 +202,25 @@ public class McpJsonRpcClient implements AutoCloseable {
     }
     
     public JsonNode initialize(JsonNode clientCapabilities) throws Exception {
+        System.out.println("DEBUG: Initializing MCP client for server: " + serverName);
+        
         ObjectNode params = objectMapper.createObjectNode();
         params.put("protocolVersion", "2024-11-05");
         params.set("capabilities", clientCapabilities != null ? clientCapabilities : objectMapper.createObjectNode());
         params.set("clientInfo", createClientInfo());
         
+        System.out.println("DEBUG: Sending initialize request to server: " + serverName);
         JsonNode result = sendRequest("initialize", params).get(10, TimeUnit.SECONDS);
+        
         if (result != null && result.has("capabilities")) {
             this.serverCapabilities = result.get("capabilities");
+            System.out.println("DEBUG: Initialization successful for server: " + serverName + 
+                             ", capabilities: " + serverCapabilities);
+        } else {
+            System.out.println("DEBUG: Initialization completed for server: " + serverName + 
+                             ", no capabilities returned");
         }
+        
         return result;
     }
     
@@ -184,7 +232,21 @@ public class McpJsonRpcClient implements AutoCloseable {
     }
     
     public List<McpTool> listTools() throws Exception {
-        JsonNode result = sendRequest("tools/list", null).get(10, TimeUnit.SECONDS);
+        System.out.println("DEBUG: Starting listTools for server: " + serverName);
+        
+        if (!isAlive()) {
+            throw new IllegalStateException("MCP process is not alive for server: " + serverName);
+        }
+        
+        System.out.println("DEBUG: Sending tools/list request to server: " + serverName);
+        CompletableFuture<JsonNode> future = sendRequest("tools/list", null);
+        
+        System.out.println("DEBUG: Waiting for tools/list response from server: " + serverName);
+        JsonNode result = future.get(10, TimeUnit.SECONDS);
+        
+        System.out.println("DEBUG: Received tools/list response from server: " + serverName + ", result: " + 
+                          (result != null ? result.toString() : "null"));
+        
         List<McpTool> tools = new ArrayList<>();
         
         if (result != null && result.has("tools")) {
@@ -197,6 +259,7 @@ public class McpJsonRpcClient implements AutoCloseable {
             }
         }
         
+        System.out.println("DEBUG: Returning " + tools.size() + " tools from server: " + serverName);
         return tools;
     }
     
@@ -282,6 +345,16 @@ public class McpJsonRpcClient implements AutoCloseable {
     }
     
     public boolean isAlive() {
-        return mcpProcess != null && mcpProcess.isAlive() && !closed;
+        boolean processAlive = mcpProcess != null && mcpProcess.isAlive() && !closed;
+        System.out.println("DEBUG: isAlive check for " + serverName + 
+                          " - process: " + (mcpProcess != null ? "exists" : "null") + 
+                          ", alive: " + (mcpProcess != null ? mcpProcess.isAlive() : "N/A") + 
+                          ", closed: " + closed + 
+                          ", pending requests: " + pendingRequests.size());
+        return processAlive;
+    }
+    
+    public int getPendingRequestCount() {
+        return pendingRequests.size();
     }
 }
