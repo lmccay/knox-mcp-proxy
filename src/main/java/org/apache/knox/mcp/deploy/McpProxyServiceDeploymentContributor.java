@@ -23,10 +23,9 @@ public class McpProxyServiceDeploymentContributor extends JerseyServiceDeploymen
         return new Version(1, 0, 0);
     }
 
-
     @Override
     protected String[] getPackages() {
-        return new String[]{ "org.apache.knox.mcp.client" };
+        return new String[]{ "org.apache.knox.mcp" };
     }
 
     @Override

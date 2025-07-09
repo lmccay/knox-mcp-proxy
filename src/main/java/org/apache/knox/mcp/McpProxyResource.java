@@ -13,9 +13,14 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.ServletContext;
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
+import javax.inject.Singleton;
+
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.JsonProcessingException;
 
+@Singleton
 @Path("/mcp/v1")
 @Consumes(MediaType.APPLICATION_JSON)
 @Produces(MediaType.APPLICATION_JSON)
@@ -27,6 +32,7 @@ public class McpProxyResource {
     private final Map<String, McpServerConnection> serverConnections = new ConcurrentHashMap<>();
     private final Map<String, Object> aggregatedTools = new ConcurrentHashMap<>();
     private final Map<String, Object> aggregatedResources = new ConcurrentHashMap<>();
+    private final ObjectMapper objectMapper = new ObjectMapper();
     private boolean initialized = false;
 
     @PostConstruct
@@ -62,10 +68,12 @@ public class McpProxyResource {
         if (serversConfig != null) {
             String[] servers = serversConfig.split(",");
             for (String serverConfig : servers) {
-                String[] parts = serverConfig.trim().split(":");
-                if (parts.length >= 2) {
-                    String name = parts[0];
-                    String endpoint = parts[1];
+                String trimmedConfig = serverConfig.trim();
+                // Split only on the first colon to separate name from URL
+                int firstColonIndex = trimmedConfig.indexOf(':');
+                if (firstColonIndex > 0 && firstColonIndex < trimmedConfig.length() - 1) {
+                    String name = trimmedConfig.substring(0, firstColonIndex).trim();
+                    String endpoint = trimmedConfig.substring(firstColonIndex + 1).trim();
                     
                     McpServerConnection connection = new McpServerConnection(name, endpoint);
                     serverConnections.put(name, connection);
@@ -138,8 +146,14 @@ public class McpProxyResource {
     public Response listTools() {
         try {
             init(); // Ensure initialized
-            return Response.ok(aggregatedTools).build();
+            // Use ObjectMapper to serialize to JSON string
+            String json = objectMapper.writeValueAsString(aggregatedTools);
+            return Response.ok(json, MediaType.APPLICATION_JSON).build();
             
+        } catch (JsonProcessingException e) {
+            return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity("Failed to serialize tools: " + e.getMessage())
+                    .build();
         } catch (Exception e) {
             return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
                     .entity("Failed to list tools: " + e.getMessage())
@@ -152,8 +166,14 @@ public class McpProxyResource {
     public Response listResources() {
         try {
             init(); // Ensure initialized
-            return Response.ok(aggregatedResources).build();
+            // Use ObjectMapper to serialize to JSON string
+            String json = objectMapper.writeValueAsString(aggregatedResources);
+            return Response.ok(json, MediaType.APPLICATION_JSON).build();
             
+        } catch (JsonProcessingException e) {
+            return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity("Failed to serialize resources: " + e.getMessage())
+                    .build();
         } catch (Exception e) {
             return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
                     .entity("Failed to list resources: " + e.getMessage())
@@ -168,11 +188,16 @@ public class McpProxyResource {
         try {
             init(); // Ensure initialized
             Object result = callToolInternal(toolName, parameters);
-            return Response.ok(result).build();
+            String json = objectMapper.writeValueAsString(result);
+            return Response.ok(json, MediaType.APPLICATION_JSON).build();
             
         } catch (IllegalArgumentException e) {
             return Response.status(Response.Status.NOT_FOUND)
                     .entity("Tool not found: " + toolName)
+                    .build();
+        } catch (JsonProcessingException e) {
+            return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity("Failed to serialize tool result: " + e.getMessage())
                     .build();
         } catch (Exception e) {
             return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
@@ -187,11 +212,16 @@ public class McpProxyResource {
         try {
             init(); // Ensure initialized
             Object result = getResource(resourceName);
-            return Response.ok(result).build();
+            String json = objectMapper.writeValueAsString(result);
+            return Response.ok(json, MediaType.APPLICATION_JSON).build();
             
         } catch (IllegalArgumentException e) {
             return Response.status(Response.Status.NOT_FOUND)
                     .entity("Resource not found: " + resourceName)
+                    .build();
+        } catch (JsonProcessingException e) {
+            return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity("Failed to serialize resource: " + e.getMessage())
                     .build();
         } catch (Exception e) {
             return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
