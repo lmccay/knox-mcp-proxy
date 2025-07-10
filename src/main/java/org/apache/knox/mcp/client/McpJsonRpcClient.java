@@ -133,6 +133,14 @@ public class McpJsonRpcClient implements AutoCloseable {
         System.out.println("DEBUG: Received message from " + serverName + ": " + message);
         
         try {
+            // Check if message looks like JSON
+            if (!message.trim().startsWith("{")) {
+                System.out.println("DEBUG: Non-JSON message from " + serverName + ", treating as plain text output: " + message);
+                // This might be plain text output from a non-MCP process
+                // For now, we'll just log it and ignore it
+                return;
+            }
+            
             JsonNode response = objectMapper.readTree(message);
             
             if (response.has("id") && !response.get("id").isNull()) {
@@ -162,7 +170,11 @@ public class McpJsonRpcClient implements AutoCloseable {
             }
         } catch (Exception e) {
             System.err.println("Error parsing message from " + serverName + ": " + e.getMessage());
-            e.printStackTrace();
+            System.err.println("Raw message was: " + message);
+            // Don't print stack trace for JSON parsing errors from non-MCP processes
+            if (!(e instanceof com.fasterxml.jackson.core.JsonParseException)) {
+                e.printStackTrace();
+            }
         }
     }
     
@@ -210,18 +222,32 @@ public class McpJsonRpcClient implements AutoCloseable {
         params.set("clientInfo", createClientInfo());
         
         System.out.println("DEBUG: Sending initialize request to server: " + serverName);
-        JsonNode result = sendRequest("initialize", params).get(10, TimeUnit.SECONDS);
         
-        if (result != null && result.has("capabilities")) {
-            this.serverCapabilities = result.get("capabilities");
-            System.out.println("DEBUG: Initialization successful for server: " + serverName + 
-                             ", capabilities: " + serverCapabilities);
-        } else {
-            System.out.println("DEBUG: Initialization completed for server: " + serverName + 
-                             ", no capabilities returned");
+        try {
+            JsonNode result = sendRequest("initialize", params).get(5, TimeUnit.SECONDS);
+            
+            if (result != null && result.has("capabilities")) {
+                this.serverCapabilities = result.get("capabilities");
+                System.out.println("DEBUG: Initialization successful for server: " + serverName + 
+                                 ", capabilities: " + serverCapabilities);
+            } else {
+                System.out.println("DEBUG: Initialization completed for server: " + serverName + 
+                                 ", no capabilities returned");
+            }
+            
+            return result;
+        } catch (java.util.concurrent.TimeoutException e) {
+            System.err.println("WARNING: Initialization timeout for server: " + serverName + 
+                             ". This might not be a proper MCP server.");
+            // Return a minimal capabilities object so the connection doesn't fail completely
+            ObjectNode emptyResult = objectMapper.createObjectNode();
+            ObjectNode emptyCaps = objectMapper.createObjectNode();
+            emptyResult.set("capabilities", emptyCaps);
+            return emptyResult;
+        } catch (Exception e) {
+            System.err.println("ERROR: Initialization failed for server: " + serverName + ": " + e.getMessage());
+            throw e;
         }
-        
-        return result;
     }
     
     private JsonNode createClientInfo() {
@@ -238,29 +264,35 @@ public class McpJsonRpcClient implements AutoCloseable {
             throw new IllegalStateException("MCP process is not alive for server: " + serverName);
         }
         
-        System.out.println("DEBUG: Sending tools/list request to server: " + serverName);
-        CompletableFuture<JsonNode> future = sendRequest("tools/list", null);
-        
-        System.out.println("DEBUG: Waiting for tools/list response from server: " + serverName);
-        JsonNode result = future.get(10, TimeUnit.SECONDS);
-        
-        System.out.println("DEBUG: Received tools/list response from server: " + serverName + ", result: " + 
-                          (result != null ? result.toString() : "null"));
-        
-        List<McpTool> tools = new ArrayList<>();
-        
-        if (result != null && result.has("tools")) {
-            for (JsonNode toolNode : result.get("tools")) {
-                tools.add(new McpTool(
-                    toolNode.get("name").asText(),
-                    toolNode.has("description") ? toolNode.get("description").asText() : "",
-                    toolNode.has("inputSchema") ? toolNode.get("inputSchema") : null
-                ));
+        try {
+            System.out.println("DEBUG: Sending tools/list request to server: " + serverName);
+            CompletableFuture<JsonNode> future = sendRequest("tools/list", null);
+            
+            System.out.println("DEBUG: Waiting for tools/list response from server: " + serverName);
+            JsonNode result = future.get(5, TimeUnit.SECONDS);
+            
+            System.out.println("DEBUG: Received tools/list response from server: " + serverName + ", result: " + 
+                              (result != null ? result.toString() : "null"));
+            
+            List<McpTool> tools = new ArrayList<>();
+            
+            if (result != null && result.has("tools")) {
+                for (JsonNode toolNode : result.get("tools")) {
+                    tools.add(new McpTool(
+                        toolNode.get("name").asText(),
+                        toolNode.has("description") ? toolNode.get("description").asText() : "",
+                        toolNode.has("inputSchema") ? toolNode.get("inputSchema") : null
+                    ));
+                }
             }
+            
+            System.out.println("DEBUG: Returning " + tools.size() + " tools from server: " + serverName);
+            return tools;
+        } catch (java.util.concurrent.TimeoutException e) {
+            System.err.println("WARNING: tools/list timeout for server: " + serverName + 
+                             ". This might not be a proper MCP server.");
+            return new ArrayList<>(); // Return empty list for non-MCP servers
         }
-        
-        System.out.println("DEBUG: Returning " + tools.size() + " tools from server: " + serverName);
-        return tools;
     }
     
     public JsonNode callTool(String toolName, Map<String, Object> arguments) throws Exception {
@@ -270,25 +302,37 @@ public class McpJsonRpcClient implements AutoCloseable {
             params.set("arguments", objectMapper.valueToTree(arguments));
         }
         
-        return sendRequest("tools/call", params).get(30, TimeUnit.SECONDS);
+        try {
+            return sendRequest("tools/call", params).get(30, TimeUnit.SECONDS);
+        } catch (java.util.concurrent.TimeoutException e) {
+            System.err.println("WARNING: tools/call timeout for server: " + serverName + 
+                             ", tool: " + toolName + ". This might not be a proper MCP server.");
+            throw new IllegalArgumentException("Tool not found or server not responding: " + toolName);
+        }
     }
     
     public List<McpResource> listResources() throws Exception {
-        JsonNode result = sendRequest("resources/list", null).get(10, TimeUnit.SECONDS);
-        List<McpResource> resources = new ArrayList<>();
-        
-        if (result != null && result.has("resources")) {
-            for (JsonNode resourceNode : result.get("resources")) {
-                resources.add(new McpResource(
-                    resourceNode.get("uri").asText(),
-                    resourceNode.has("name") ? resourceNode.get("name").asText() : "",
-                    resourceNode.has("description") ? resourceNode.get("description").asText() : "",
-                    resourceNode.has("mimeType") ? resourceNode.get("mimeType").asText() : null
-                ));
+        try {
+            JsonNode result = sendRequest("resources/list", null).get(10, TimeUnit.SECONDS);
+            List<McpResource> resources = new ArrayList<>();
+            
+            if (result != null && result.has("resources")) {
+                for (JsonNode resourceNode : result.get("resources")) {
+                    resources.add(new McpResource(
+                        resourceNode.get("uri").asText(),
+                        resourceNode.has("name") ? resourceNode.get("name").asText() : "",
+                        resourceNode.has("description") ? resourceNode.get("description").asText() : "",
+                        resourceNode.has("mimeType") ? resourceNode.get("mimeType").asText() : null
+                    ));
+                }
             }
+            
+            return resources;
+        } catch (java.util.concurrent.TimeoutException e) {
+            System.err.println("WARNING: resources/list timeout for server: " + serverName + 
+                             ". This might not be a proper MCP server.");
+            return new ArrayList<>(); // Return empty list for non-MCP servers
         }
-        
-        return resources;
     }
     
     public JsonNode readResource(String uri) throws Exception {

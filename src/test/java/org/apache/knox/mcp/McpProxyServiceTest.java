@@ -9,7 +9,6 @@ import org.mockito.MockitoAnnotations;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.ServletContext;
 import javax.ws.rs.core.Response;
-import java.util.HashMap;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -73,7 +72,8 @@ class McpProxyResourceTest {
     
     @Test
     void testCallToolWithInvalidTool() {
-        Response response = resource.callTool("nonexistent", new HashMap<>());
+        String emptyParams = "{}";
+        Response response = resource.callTool("nonexistent", emptyParams);
         assertNotNull(response);
         assertEquals(Response.Status.NOT_FOUND.getStatusCode(), response.getStatus());
     }

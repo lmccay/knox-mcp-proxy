@@ -328,8 +328,27 @@ public class McpSseClient implements AutoCloseable {
             System.out.println("DEBUG: Message endpoint response code: " + responseCode);
             
             if (responseCode != 200 && responseCode != 202) {
+                // Try to read the error response body
+                String errorBody = "";
+                try {
+                    if (connection.getErrorStream() != null) {
+                        try (BufferedReader errorReader = new BufferedReader(
+                                new InputStreamReader(connection.getErrorStream(), "UTF-8"))) {
+                            StringBuilder errorResponse = new StringBuilder();
+                            String line;
+                            while ((line = errorReader.readLine()) != null) {
+                                errorResponse.append(line);
+                            }
+                            errorBody = errorResponse.toString();
+                        }
+                    }
+                } catch (Exception e) {
+                    System.err.println("DEBUG: Could not read error response body: " + e.getMessage());
+                }
+                
+                System.err.println("ERROR: HTTP request failed - code: " + responseCode + ", error body: " + errorBody);
                 pendingRequests.remove(id);
-                future.completeExceptionally(new IOException("HTTP request failed with code: " + responseCode));
+                future.completeExceptionally(new IOException("HTTP request failed with code: " + responseCode + ", body: " + errorBody));
             } else {
                 System.out.println("DEBUG: SSE request sent successfully, waiting for response with ID: " + id);
             }
@@ -460,11 +479,17 @@ public class McpSseClient implements AutoCloseable {
     }
     
     public JsonNode callTool(String toolName, Map<String, Object> arguments) throws Exception {
+        System.out.println("DEBUG: callTool - toolName: " + toolName + ", arguments: " + arguments);
+        
         ObjectNode params = objectMapper.createObjectNode();
         params.put("name", toolName);
         if (arguments != null) {
-            params.set("arguments", objectMapper.valueToTree(arguments));
+            JsonNode argsNode = objectMapper.valueToTree(arguments);
+            System.out.println("DEBUG: callTool - converted arguments to JSON: " + argsNode);
+            params.set("arguments", argsNode);
         }
+        
+        System.out.println("DEBUG: callTool - final params: " + params);
         
         return sendSseRequest("tools/call", params).get(30, TimeUnit.SECONDS);
     }
