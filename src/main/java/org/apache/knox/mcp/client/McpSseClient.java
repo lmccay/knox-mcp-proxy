@@ -69,6 +69,10 @@ public class McpSseClient implements AutoCloseable {
     private void establishSseConnection() throws IOException {
         System.out.println("DEBUG: Establishing SSE connection to: " + sseEndpoint);
         
+        // Reset message endpoint when establishing a new connection
+        this.messageEndpoint = null;
+        System.out.println("DEBUG: Reset message endpoint for new SSE connection");
+        
         URL url = new URL(sseEndpoint);
         sseConnection = (HttpURLConnection) url.openConnection();
         sseConnection.setRequestMethod("GET");
@@ -123,6 +127,11 @@ public class McpSseClient implements AutoCloseable {
                     System.err.println("Error in SSE connection to " + serverName + ": " + e.getMessage());
                     e.printStackTrace();
                 }
+            } finally {
+                // Always reset message endpoint when SSE reader thread ends
+                // This prevents using stale endpoints after connection drops
+                messageEndpoint = null;
+                System.out.println("DEBUG: Reset message endpoint due to SSE reader thread ending for server: " + serverName);
             }
         });
         
@@ -260,6 +269,13 @@ public class McpSseClient implements AutoCloseable {
             return future;
         }
         
+        // Check if SSE connection is still alive
+        if (sseReaderThread == null || !sseReaderThread.isAlive()) {
+            CompletableFuture<JsonNode> future = new CompletableFuture<>();
+            future.completeExceptionally(new IllegalStateException("SSE connection is not alive"));
+            return future;
+        }
+        
         long id = requestIdCounter.getAndIncrement();
         
         ObjectNode request = objectMapper.createObjectNode();
@@ -346,6 +362,13 @@ public class McpSseClient implements AutoCloseable {
                     System.err.println("DEBUG: Could not read error response body: " + e.getMessage());
                 }
                 
+                // Check if this might be a stale endpoint (404, 410, etc.)
+                if (responseCode == 404 || responseCode == 410 || responseCode == 400) {
+                    System.err.println("WARNING: Message endpoint might be stale (code: " + responseCode + 
+                                     "), resetting endpoint for server: " + serverName);
+                    this.messageEndpoint = null; // Reset so it will wait for a new endpoint event
+                }
+                
                 System.err.println("ERROR: HTTP request failed - code: " + responseCode + ", error body: " + errorBody);
                 pendingRequests.remove(id);
                 future.completeExceptionally(new IOException("HTTP request failed with code: " + responseCode + ", body: " + errorBody));
@@ -427,6 +450,12 @@ public class McpSseClient implements AutoCloseable {
             System.out.println("DEBUG: 'initialized' notification response code: " + responseCode);
             
             if (responseCode != 200 && responseCode != 202) {
+                // Check if this might be a stale endpoint
+                if (responseCode == 404 || responseCode == 410 || responseCode == 400) {
+                    System.err.println("WARNING: Message endpoint might be stale during initialization (code: " + responseCode + 
+                                     "), resetting endpoint for server: " + serverName);
+                    this.messageEndpoint = null; // Reset so it will wait for a new endpoint event
+                }
                 throw new IOException("Failed to send 'initialized' notification, response code: " + responseCode);
             } else {
                 System.out.println("DEBUG: 'initialized' notification sent successfully - client is now ready");
@@ -544,6 +573,10 @@ public class McpSseClient implements AutoCloseable {
         }
         pendingRequests.clear();
         
+        // Reset message endpoint when closing
+        this.messageEndpoint = null;
+        System.out.println("DEBUG: Reset message endpoint on close for server: " + serverName);
+        
         // Interrupt SSE reader thread
         if (sseReaderThread != null) {
             sseReaderThread.interrupt();
@@ -573,6 +606,6 @@ public class McpSseClient implements AutoCloseable {
     }
     
     public boolean isAlive() {
-        return !closed && sseReaderThread != null && sseReaderThread.isAlive();
+        return !closed && sseReaderThread != null && sseReaderThread.isAlive() && messageEndpoint != null;
     }
 }

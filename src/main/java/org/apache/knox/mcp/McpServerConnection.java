@@ -182,9 +182,7 @@ public class McpServerConnection {
     }
 
     public Object callTool(String toolName, Map<String, Object> parameters) throws Exception {
-        if (!connected) {
-            throw new IllegalStateException("Not connected to MCP server: " + name);
-        }
+        ensureConnectionAlive(); // Check and potentially reconnect
 
         try {
             JsonNode result;
@@ -212,9 +210,7 @@ public class McpServerConnection {
     }
 
     public Object getResource(String resourceName) throws Exception {
-        if (!connected) {
-            throw new IllegalStateException("Not connected to MCP server: " + name);
-        }
+        ensureConnectionAlive(); // Check and potentially reconnect
 
         try {
             JsonNode result;
@@ -311,5 +307,39 @@ public class McpServerConnection {
 
     public boolean isConnected() {
         return connected;
+    }
+
+    private void ensureConnectionAlive() throws Exception {
+        if (!connected) {
+            throw new IllegalStateException("Not connected to MCP server: " + name);
+        }
+        
+        // Check if SSE connection is still alive and reconnect if needed
+        if (transportType == TransportType.SSE && sseClient != null && !sseClient.isAlive()) {
+            System.out.println("DEBUG: SSE connection appears to be dead for server: " + name + ", attempting reconnect");
+            try {
+                sseClient.close(); // Clean up the old connection
+                connectSse(); // Reconnect
+                refreshToolsAndResources(); // Refresh after reconnection
+                System.out.println("DEBUG: Successfully reconnected SSE client for server: " + name);
+            } catch (Exception e) {
+                connected = false; // Mark as disconnected if reconnection fails
+                throw new Exception("Failed to reconnect to SSE server: " + name, e);
+            }
+        }
+        
+        // Similar check for custom HTTP/SSE connections
+        if (transportType == TransportType.CUSTOM_HTTP_SSE && customHttpSseClient != null && !customHttpSseClient.isAlive()) {
+            System.out.println("DEBUG: Custom HTTP/SSE connection appears to be dead for server: " + name + ", attempting reconnect");
+            try {
+                customHttpSseClient.close(); // Clean up the old connection
+                connectCustomHttpSse(); // Reconnect
+                refreshToolsAndResources(); // Refresh after reconnection
+                System.out.println("DEBUG: Successfully reconnected custom HTTP/SSE client for server: " + name);
+            } catch (Exception e) {
+                connected = false; // Mark as disconnected if reconnection fails
+                throw new Exception("Failed to reconnect to custom HTTP/SSE server: " + name, e);
+            }
+        }
     }
 }
