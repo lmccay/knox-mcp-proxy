@@ -11,6 +11,7 @@ import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.ServletContext;
+import javax.servlet.AsyncContext;
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
 import javax.inject.Singleton;
@@ -18,9 +19,12 @@ import javax.inject.Singleton;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.io.IOException;
+import java.util.List;
+import java.util.ArrayList;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.core.JsonProcessingException;
 
 @Singleton
@@ -35,6 +39,8 @@ public class McpProxyResource {
     private final Map<String, McpServerConnection> serverConnections = new ConcurrentHashMap<>();
     private final Map<String, Object> aggregatedTools = new ConcurrentHashMap<>();
     private final Map<String, Object> aggregatedResources = new ConcurrentHashMap<>();
+    private final Map<String, String> toolNameMapping = new ConcurrentHashMap<>(); // sanitized -> original
+    private final Map<String, String> serverMapping = new ConcurrentHashMap<>(); // sanitized -> serverName
     private final ObjectMapper objectMapper = new ObjectMapper();
     private boolean initialized = false;
 
@@ -59,6 +65,10 @@ public class McpProxyResource {
             serverConnections.clear();
             aggregatedTools.clear();
             aggregatedResources.clear();
+            toolNameMapping.clear();
+            serverMapping.clear();
+            // Shutdown SSE session manager
+            McpSseSessionManager.getInstance().shutdown();
         } catch (Exception e) {
             // Log error but don't fail shutdown
             System.err.println("Error during cleanup: " + e.getMessage());
@@ -106,16 +116,62 @@ public class McpProxyResource {
             
             // Prefix tools and resources with server name to avoid conflicts
             String serverName = connection.getName();
-            tools.forEach((key, value) -> aggregatedTools.put(serverName + "." + key, value));
+            tools.forEach((key, value) -> {
+                String originalToolName = serverName + "_" + key;
+                String sanitizedToolName = sanitizeToolName(originalToolName);
+                
+                aggregatedTools.put(sanitizedToolName, value);
+                toolNameMapping.put(sanitizedToolName, key); // Map back to original tool name
+                serverMapping.put(sanitizedToolName, serverName); // Map to server name
+            });
             resources.forEach((key, value) -> aggregatedResources.put(serverName + "." + key, value));
             
         } catch (Exception e) {
             System.err.println("Failed to aggregate tools/resources from server: " + connection.getName());
         }
     }
+    
+    /**
+     * Sanitize tool names to ensure consistent naming across aggregated MCP servers.
+     * Follows pattern: ^[a-zA-Z0-9_-]+$ for maximum compatibility and consistency.
+     */
+    private String sanitizeToolName(String toolName) {
+        if (toolName == null || toolName.trim().isEmpty()) {
+            return "unknown_tool";
+        }
+        
+        // Replace invalid characters with underscores and ensure it starts with a letter/underscore
+        String sanitized = toolName.replaceAll("[^a-zA-Z0-9_-]", "_");
+        
+        // Ensure it starts with a letter or underscore
+        if (!sanitized.matches("^[a-zA-Z_].*")) {
+            sanitized = "_" + sanitized;
+        }
+        
+        // Ensure it's not empty after sanitization
+        if (sanitized.trim().isEmpty() || sanitized.equals("_")) {
+            sanitized = "unknown_tool";
+        }
+        
+        System.out.println("DEBUG: Sanitized tool name '" + toolName + "' -> '" + sanitized + "'");
+        return sanitized;
+    }
 
     private Object callToolInternal(String toolName, Map<String, Object> parameters) throws Exception {
-        // First, try the tool name as provided (might be serverName.toolName format)
+        // First, check if this is a sanitized tool name in our direct mapping
+        if (toolNameMapping.containsKey(toolName) && serverMapping.containsKey(toolName)) {
+            String originalToolName = toolNameMapping.get(toolName);
+            String serverName = serverMapping.get(toolName);
+            
+            McpServerConnection connection = serverConnections.get(serverName);
+            if (connection != null) {
+                System.out.println("DEBUG: Calling tool '" + originalToolName + "' on server '" + serverName + 
+                                 "' (sanitized name: '" + toolName + "')");
+                return connection.callTool(originalToolName, parameters);
+            }
+        }
+        
+        // Legacy support: try the tool name as provided (might be serverName.toolName format)
         if (toolName.contains(".")) {
             String[] parts = toolName.split("\\.", 2);
             String serverName = parts[0];
@@ -127,7 +183,7 @@ public class McpProxyResource {
             }
         }
         
-        // If not found, search through all aggregated tools for a match
+        // Legacy support: search through all aggregated tools for a match
         for (String aggregatedToolName : aggregatedTools.keySet()) {
             if (aggregatedToolName.endsWith("." + toolName)) {
                 String[] parts = aggregatedToolName.split("\\.", 2);
@@ -298,9 +354,26 @@ public class McpProxyResource {
 
     @POST
     @Path("/message")
-    public Response handleJsonRpcRequest(String requestJsonString) {
+    public Response handleJsonRpcRequest(String requestJsonString, @Context HttpServletRequest request) {
         try {
             init(); // Ensure initialized
+            
+            // Check if this is an SSE session request (look for session ID in headers or parameters)
+            String sessionId = request.getHeader("X-Session-ID");
+            if (sessionId == null) {
+                sessionId = request.getParameter("session");
+            }
+            
+            // If we have a session ID, route to SSE session manager
+            if (sessionId != null) {
+                System.out.println("DEBUG: Routing message to SSE session: " + sessionId);
+                McpSseSessionManager.getInstance().handleMessageForSession(sessionId, requestJsonString);
+                // Return accepted response - the actual response will come via SSE
+                return Response.accepted().build();
+            }
+            
+            // Otherwise handle as regular HTTP JSON-RPC request
+            System.out.println("DEBUG: Handling as regular HTTP JSON-RPC request");
             
             // Parse JSON-RPC request
             if (requestJsonString == null || requestJsonString.trim().isEmpty()) {
@@ -423,28 +496,128 @@ public class McpProxyResource {
     private Object listAllTools() throws Exception {
         // Return tools in MCP format
         ObjectNode result = objectMapper.createObjectNode();
-        // For now, return empty array - this should be populated from actual server connections
-        result.set("tools", objectMapper.createArrayNode());
+        ArrayNode toolsArray = objectMapper.createArrayNode();
+        
+        // Get tools from all aggregated servers
+        for (Map.Entry<String, Object> entry : aggregatedTools.entrySet()) {
+            String toolName = entry.getKey();
+            Object toolData = entry.getValue();
+            
+            ObjectNode toolNode = objectMapper.createObjectNode();
+            toolNode.put("name", toolName);
+            
+            if (toolData instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> toolMap = (Map<String, Object>) toolData;
+                
+                if (toolMap.containsKey("description")) {
+                    toolNode.put("description", String.valueOf(toolMap.get("description")));
+                }
+                
+                if (toolMap.containsKey("inputSchema")) {
+                    toolNode.set("inputSchema", objectMapper.valueToTree(toolMap.get("inputSchema")));
+                }
+            }
+            
+            toolsArray.add(toolNode);
+        }
+        
+        result.set("tools", toolsArray);
         return result;
     }
     
     private Object listAllResources() throws Exception {
         // Return resources in MCP format
         ObjectNode result = objectMapper.createObjectNode();
-        // For now, return empty array - this should be populated from actual server connections
-        result.set("resources", objectMapper.createArrayNode());
+        ArrayNode resourcesArray = objectMapper.createArrayNode();
+        
+        // Get resources from all aggregated servers
+        for (Map.Entry<String, Object> entry : aggregatedResources.entrySet()) {
+            String resourceUri = entry.getKey();
+            Object resourceData = entry.getValue();
+            
+            ObjectNode resourceNode = objectMapper.createObjectNode();
+            resourceNode.put("uri", resourceUri);
+            
+            if (resourceData instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> resourceMap = (Map<String, Object>) resourceData;
+                
+                if (resourceMap.containsKey("name")) {
+                    resourceNode.put("name", String.valueOf(resourceMap.get("name")));
+                }
+                
+                if (resourceMap.containsKey("description")) {
+                    resourceNode.put("description", String.valueOf(resourceMap.get("description")));
+                }
+                
+                if (resourceMap.containsKey("mimeType")) {
+                    resourceNode.put("mimeType", String.valueOf(resourceMap.get("mimeType")));
+                }
+            }
+            
+            resourcesArray.add(resourceNode);
+        }
+        
+        result.set("resources", resourcesArray);
         return result;
     }
 
     @GET
     @Path("/sse")
     @Produces("text/event-stream")
-    public Response handleSseConnection() {
-        // For a complete MCP implementation, we should support SSE connections
-        // This is a placeholder for SSE endpoint - full implementation would require
-        // streaming response handling and session management
-        return Response.status(Response.Status.NOT_IMPLEMENTED)
-                .entity("SSE endpoint not yet implemented")
-                .build();
+    public void handleSseConnection(@Context HttpServletRequest request) {
+        System.out.println("DEBUG: SSE connection request received");
+        
+        try {
+            init(); // Ensure initialized
+            
+            // Enable async processing for SSE
+            AsyncContext asyncContext = request.startAsync();
+            asyncContext.setTimeout(0); // No timeout for SSE connections
+            
+            // Create SSE session
+            McpSseSession session = McpSseSessionManager.getInstance().createSession(asyncContext, this, request);
+            
+            System.out.println("DEBUG: SSE session created: " + session.getSessionId());
+            
+            // The session will handle the response and keep the connection alive
+            // AsyncContext will be completed when the session is closed
+            
+        } catch (Exception e) {
+            System.err.println("ERROR: Failed to establish SSE connection: " + e.getMessage());
+            e.printStackTrace();
+            
+            // Send error response
+            try {
+                AsyncContext asyncContext = request.getAsyncContext();
+                if (asyncContext != null) {
+                    asyncContext.complete();
+                }
+            } catch (Exception completeError) {
+                System.err.println("ERROR: Failed to complete async context: " + completeError.getMessage());
+            }
+        }
+    }
+    
+    // Methods for SSE session to call
+    public Object listAllToolsForMcp() throws Exception {
+        init(); // Ensure initialized
+        return listAllTools();
+    }
+    
+    public Object listAllResourcesForMcp() throws Exception {
+        init(); // Ensure initialized
+        return listAllResources();
+    }
+    
+    public Object handleToolCallForMcp(JsonNode params) throws Exception {
+        init(); // Ensure initialized
+        return handleToolCall(params);
+    }
+    
+    public Object handleResourceReadForMcp(JsonNode params) throws Exception {
+        init(); // Ensure initialized
+        return handleResourceRead(params);
     }
 }

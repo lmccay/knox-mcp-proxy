@@ -86,11 +86,11 @@ JsonNode response = readFromSSE("/sse"); // Response comes via SSE
 - Manages service lifecycle
 
 **Jersey REST API:**
-- `/mcp/v1/tools` - Tool management
+- `/mcp/v1/tools` - Tool management (MCP format)
 - `/mcp/v1/resources` - Resource access
 - `/mcp/v1/health` - Service health
 
-### 4. Connection Management
+## Connection Management
 
 **Lifecycle:**
 1. **Connect**: Parse endpoint (stdio://, http://, sse://, custom-http-sse://), establish connection, initialize MCP

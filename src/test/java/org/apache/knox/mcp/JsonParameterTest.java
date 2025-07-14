@@ -110,7 +110,7 @@ class JsonParameterTest {
     @Test
     void testJsonRpcToolsListRequest() {
         String jsonRpcRequest = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}";
-        Response response = resource.handleJsonRpcRequest(jsonRpcRequest);
+        Response response = resource.handleJsonRpcRequest(jsonRpcRequest, request);
         assertNotNull(response);
         assertEquals(Response.Status.OK.getStatusCode(), response.getStatus());
     }
@@ -118,7 +118,7 @@ class JsonParameterTest {
     @Test
     void testJsonRpcToolsCallRequest() {
         String jsonRpcRequest = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"nonexistent\",\"arguments\":{}}}";
-        Response response = resource.handleJsonRpcRequest(jsonRpcRequest);
+        Response response = resource.handleJsonRpcRequest(jsonRpcRequest, request);
         assertNotNull(response);
         assertEquals(Response.Status.OK.getStatusCode(), response.getStatus());
         // Should return JSON-RPC error response for tool not found
@@ -127,7 +127,7 @@ class JsonParameterTest {
     @Test
     void testJsonRpcInvalidMethod() {
         String jsonRpcRequest = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"invalid/method\"}";
-        Response response = resource.handleJsonRpcRequest(jsonRpcRequest);
+        Response response = resource.handleJsonRpcRequest(jsonRpcRequest, request);
         assertNotNull(response);
         assertEquals(Response.Status.OK.getStatusCode(), response.getStatus());
         // Should return JSON-RPC error response for method not found
@@ -136,7 +136,7 @@ class JsonParameterTest {
     @Test
     void testJsonRpcMissingMethod() {
         String jsonRpcRequest = "{\"jsonrpc\":\"2.0\",\"id\":4}";
-        Response response = resource.handleJsonRpcRequest(jsonRpcRequest);
+        Response response = resource.handleJsonRpcRequest(jsonRpcRequest, request);
         assertNotNull(response);
         assertEquals(Response.Status.OK.getStatusCode(), response.getStatus());
         // Should return JSON-RPC error response for missing method
