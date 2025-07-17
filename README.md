@@ -1,10 +1,10 @@
 # Knox MCP Proxy
 
-A comprehensive Apache Knox extension that aggregates multiple Model Context Protocol (MCP) servers into a unified REST API gateway, providing seamless access to distributed AI tools and resources with full transport compatibility.
+A comprehensive Apache Knox extension that aggregates multiple Model Context Protocol (MCP) servers into a unified MCP gateway, providing seamless access to distributed AI tools and resources with full transport compatibility.
 
 ## 🌟 Overview
 
-Knox MCP Proxy extends Apache Knox to serve as a central gateway for MCP ecosystems. It provides a Jersey-based REST API that connects to multiple downstream MCP servers using any transport protocol and exposes their aggregated capabilities through secure, authenticated HTTP endpoints.
+Knox MCP Proxy extends Apache Knox to serve as a central gateway for MCP ecosystems. It provides a Jersey-based REST API and MCP Server that connects to multiple downstream MCP servers using any transport protocol and exposes their aggregated capabilities through secure, authenticated HTTP endpoints.
 
 ### ✨ Key Features
 
