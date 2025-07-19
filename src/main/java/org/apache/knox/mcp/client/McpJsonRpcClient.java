@@ -12,6 +12,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.Set;
 
 /**
  * Java 8 compatible MCP client implementation using JSON-RPC 2.0 over stdio
@@ -32,9 +33,36 @@ public class McpJsonRpcClient implements AutoCloseable {
     private JsonNode serverCapabilities;
     
     public McpJsonRpcClient(String command, String[] args) throws IOException {
+        this(command, args, null);
+    }
+    
+    public McpJsonRpcClient(String command, String[] args, java.util.Set<String> allowedCommands) throws IOException {
         this.serverName = extractServerName(command, args);
+        validateCommand(command, allowedCommands);
         startProcess(command, args);
         startReaderThread();
+    }
+    
+    private void validateCommand(String command, java.util.Set<String> allowedCommands) throws IOException {
+        if (allowedCommands == null || allowedCommands.isEmpty()) {
+            System.out.println("DEBUG: No command allowlist configured, allowing all stdio commands");
+            return;
+        }
+        
+        // Extract the base command name
+        String baseName = command.substring(command.lastIndexOf('/') + 1);
+        if (baseName.contains(".")) {
+            baseName = baseName.substring(0, baseName.lastIndexOf('.'));
+        }
+        
+        if (!allowedCommands.contains(baseName)) {
+            String errorMsg = "Command '" + baseName + "' is not in the allowed stdio commands list: " + allowedCommands;
+            System.err.println("SECURITY: Blocked attempt to execute disallowed stdio command: " + command);
+            System.err.println("SECURITY: " + errorMsg);
+            throw new SecurityException(errorMsg);
+        }
+        
+        System.out.println("DEBUG: Command '" + baseName + "' is allowed by stdio allowlist");
     }
     
     private String extractServerName(String command, String[] args) {

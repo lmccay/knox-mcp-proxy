@@ -71,6 +71,42 @@ MCP Proxy Resource (Aggregation)
 - **`custom-http-sse://host:port`** - Knox-optimized hybrid transport
 - **`custom-https-sse://host:port`** - Secure Knox hybrid transport
 
+## 🔒 Security Configuration
+
+### Stdio Command Allowlist
+
+To protect against remote code execution, stdio-based MCP servers are restricted to an allowlist of permitted commands:
+
+```xml
+<param>
+    <n>mcp.stdio.allowed.commands</n>
+    <value>python,node,java,npm</value>
+</param>
+```
+
+**Security Features:**
+- ✅ **Command Validation**: Only allowlisted commands can be executed
+- ✅ **Path Protection**: Commands are validated by base name only (e.g., `/usr/bin/python` → `python`)
+- ✅ **Default Security**: If no allowlist is configured, a warning is logged
+- ✅ **Clear Error Messages**: Blocked commands receive descriptive error responses
+
+**Example Secure Configuration:**
+```xml
+<service>
+    <role>MCPPROXY</role>
+    <n>mcp</n>
+    <version>1.0.0</version>
+    <param>
+        <n>mcp.servers</n>
+        <value>calculator:stdio://python /opt/mcp/calculator.py</value>
+    </param>
+    <param>
+        <n>mcp.stdio.allowed.commands</n>
+        <value>python,node</value>
+    </param>
+</service>
+```
+
 ## 📚 API Reference
 
 ### 🔍 Discovery Endpoints

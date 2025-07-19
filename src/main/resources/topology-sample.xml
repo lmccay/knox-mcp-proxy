@@ -39,5 +39,9 @@
             <name>mcp.bind.port</name>
             <value>8080</value>
         </param>
+        <param>
+            <n>mcp.stdio.allowed.commands</n>
+            <value>python,node,npm,npx,java,uvx,uv</value>
+        </param>
     </service>
 </topology>

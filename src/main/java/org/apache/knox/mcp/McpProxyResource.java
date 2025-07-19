@@ -21,17 +21,22 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.io.IOException;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.Set;
+import java.util.HashSet;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import org.apache.knox.mcp.util.McpLogger;
 
 @Singleton
 @Path("/mcp/v1")
 @Consumes(MediaType.APPLICATION_JSON)
 @Produces(MediaType.APPLICATION_JSON)
 public class McpProxyResource {
+
+    private static final McpLogger logger = McpLogger.getLogger(McpProxyResource.class);
 
     @Context
     private HttpServletRequest request;
@@ -78,6 +83,8 @@ public class McpProxyResource {
     private void initializeConnections() throws Exception {
         // Get topology configuration from servlet context
         String serversConfig = getConfigParameter("mcp.servers");
+        java.util.Set<String> allowedStdioCommands = parseAllowedStdioCommands();
+        
         if (serversConfig != null) {
             String[] servers = serversConfig.split(",");
             for (String serverConfig : servers) {
@@ -88,7 +95,7 @@ public class McpProxyResource {
                     String name = trimmedConfig.substring(0, firstColonIndex).trim();
                     String endpoint = trimmedConfig.substring(firstColonIndex + 1).trim();
                     
-                    McpServerConnection connection = new McpServerConnection(name, endpoint);
+                    McpServerConnection connection = new McpServerConnection(name, endpoint, allowedStdioCommands);
                     serverConnections.put(name, connection);
                     
                     // Connect and aggregate tools/resources
@@ -97,6 +104,26 @@ public class McpProxyResource {
                 }
             }
         }
+    }
+    
+    private java.util.Set<String> parseAllowedStdioCommands() {
+        String allowedCommandsConfig = getConfigParameter("mcp.stdio.allowed.commands");
+        java.util.Set<String> allowedCommands = new java.util.HashSet<>();
+        
+        if (allowedCommandsConfig != null && !allowedCommandsConfig.trim().isEmpty()) {
+            String[] commands = allowedCommandsConfig.split(",");
+            for (String command : commands) {
+                String trimmedCommand = command.trim();
+                if (!trimmedCommand.isEmpty()) {
+                    allowedCommands.add(trimmedCommand);
+                }
+            }
+            logger.info("Configured stdio allowed commands: " + allowedCommands);
+        } else {
+            logger.warn("No stdio command allowlist configured (mcp.stdio.allowed.commands). All stdio commands will be allowed.");
+        }
+        
+        return allowedCommands.isEmpty() ? null : allowedCommands;
     }
 
     private String getConfigParameter(String key) {
@@ -153,7 +180,7 @@ public class McpProxyResource {
             sanitized = "unknown_tool";
         }
         
-        System.out.println("DEBUG: Sanitized tool name '" + toolName + "' -> '" + sanitized + "'");
+        logger.debug("Sanitized tool name '" + toolName + "' -> '" + sanitized + "'");
         return sanitized;
     }
 
@@ -165,8 +192,8 @@ public class McpProxyResource {
             
             McpServerConnection connection = serverConnections.get(serverName);
             if (connection != null) {
-                System.out.println("DEBUG: Calling tool '" + originalToolName + "' on server '" + serverName + 
-                                 "' (sanitized name: '" + toolName + "')");
+                logger.debug("Calling tool '" + originalToolName + "' on server '" + serverName + 
+                             "' (sanitized name: '" + toolName + "')");
                 return connection.callTool(originalToolName, parameters);
             }
         }
@@ -366,14 +393,14 @@ public class McpProxyResource {
             
             // If we have a session ID, route to SSE session manager
             if (sessionId != null) {
-                System.out.println("DEBUG: Routing message to SSE session: " + sessionId);
+                logger.debug("Routing message to SSE session: " + sessionId);
                 McpSseSessionManager.getInstance().handleMessageForSession(sessionId, requestJsonString);
                 // Return accepted response - the actual response will come via SSE
                 return Response.accepted().build();
             }
             
             // Otherwise handle as regular HTTP JSON-RPC request
-            System.out.println("DEBUG: Handling as regular HTTP JSON-RPC request");
+            logger.debug("Handling as regular HTTP JSON-RPC request");
             
             // Parse JSON-RPC request
             if (requestJsonString == null || requestJsonString.trim().isEmpty()) {
@@ -567,7 +594,7 @@ public class McpProxyResource {
     @Path("/sse")
     @Produces("text/event-stream")
     public void handleSseConnection(@Context HttpServletRequest request) {
-        System.out.println("DEBUG: SSE connection request received");
+        logger.debug("SSE connection request received");
         
         try {
             init(); // Ensure initialized
@@ -579,7 +606,7 @@ public class McpProxyResource {
             // Create SSE session
             McpSseSession session = McpSseSessionManager.getInstance().createSession(asyncContext, this, request);
             
-            System.out.println("DEBUG: SSE session created: " + session.getSessionId());
+            logger.debug("SSE session created: " + session.getSessionId());
             
             // The session will handle the response and keep the connection alive
             // AsyncContext will be completed when the session is closed

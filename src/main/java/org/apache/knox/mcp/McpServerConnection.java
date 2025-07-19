@@ -31,10 +31,16 @@ public class McpServerConnection {
     
     private final Map<String, Object> cachedTools = new ConcurrentHashMap<>();
     private final Map<String, Object> cachedResources = new ConcurrentHashMap<>();
+    private java.util.Set<String> allowedStdioCommands;
 
     public McpServerConnection(String name, String endpoint) {
+        this(name, endpoint, null);
+    }
+    
+    public McpServerConnection(String name, String endpoint, java.util.Set<String> allowedStdioCommands) {
         this.name = name;
         this.endpoint = endpoint;
+        this.allowedStdioCommands = allowedStdioCommands;
     }
 
     public void connect() throws Exception {
@@ -79,8 +85,8 @@ public class McpServerConnection {
             System.arraycopy(parts, 1, args, 0, args.length);
         }
         
-        // Create and initialize the stdio MCP client
-        stdioClient = new McpJsonRpcClient(cmd, args);
+        // Create and initialize the stdio MCP client with allowlist validation
+        stdioClient = new McpJsonRpcClient(cmd, args, allowedStdioCommands);
         
         // Initialize the connection with capabilities
         JsonNode clientCapabilities = objectMapper.createObjectNode();
