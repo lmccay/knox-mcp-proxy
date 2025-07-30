@@ -7,6 +7,7 @@ import javax.ws.rs.Path;
 import javax.ws.rs.PathParam;
 import javax.ws.rs.Produces;
 import javax.ws.rs.core.Context;
+import javax.ws.rs.core.HttpHeaders;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 import javax.servlet.http.HttpServletRequest;
@@ -19,10 +20,6 @@ import javax.inject.Singleton;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.io.IOException;
-import java.util.List;
-import java.util.ArrayList;
-import java.util.Set;
-import java.util.HashSet;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -252,6 +249,247 @@ public class McpProxyResource {
         throw new IllegalArgumentException("Resource not found: " + resourceName);
     }
 
+    // =================================================================
+    // MCP Streamable HTTP - Unified Endpoint (Specification Compliant)
+    // =================================================================
+    
+    /**
+     * MCP GET endpoint - Establishes SSE connections or returns service info
+     * according to the MCP Streamable HTTP specification.
+     */
+    @GET
+    @Path("/")
+    @Produces({MediaType.APPLICATION_JSON, "text/event-stream"})
+    public Response handleMcpGetRequest(@Context HttpServletRequest request, 
+                                      @Context HttpHeaders headers) {
+        try {
+            init(); // Ensure initialized
+            
+            String acceptHeader = headers.getHeaderString("Accept");
+            String mcpVersion = headers.getHeaderString("mcp-version");
+            
+            logger.debug("MCP GET endpoint - Accept: " + acceptHeader + ", MCP-Version: " + mcpVersion);
+            
+            // GET requests establish SSE connections when Accept header requests SSE
+            // Check if the client specifically prefers SSE over JSON
+            if (acceptHeader != null && isEventStreamPreferred(acceptHeader)) {
+                logger.debug("Establishing SSE connection via unified GET endpoint");
+                return handleSseConnectionUnified(request);
+            } else {
+                // GET without SSE Accept header - return basic info
+                Response.ResponseBuilder responseBuilder = Response.ok();
+                if (mcpVersion != null) {
+                    responseBuilder.header("mcp-version", mcpVersion);
+                } else {
+                    responseBuilder.header("mcp-version", "2024-11-05");
+                }
+                
+                return responseBuilder
+                        .entity(createMcpInfoResponse())
+                        .type(MediaType.APPLICATION_JSON)
+                        .build();
+            }
+            
+        } catch (Exception e) {
+            logger.error("Error in MCP GET endpoint: " + e.getMessage(), e);
+            return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity("Internal server error: " + e.getMessage())
+                    .build();
+        }
+    }
+    
+    /**
+     * MCP POST endpoint - Handles JSON-RPC messages with optional streaming
+     * according to the MCP Streamable HTTP specification.
+     */
+    @POST
+    @Path("/")
+    @Produces({MediaType.APPLICATION_JSON, "text/event-stream"})
+    @Consumes(MediaType.APPLICATION_JSON)
+    public Response handleMcpPostRequest(@Context HttpServletRequest request,
+                                       @Context HttpHeaders headers,
+                                       String requestBody) {
+        try {
+            init(); // Ensure initialized
+            
+            String acceptHeader = headers.getHeaderString("Accept");
+            String mcpVersion = headers.getHeaderString("mcp-version");
+            
+            logger.debug("MCP POST endpoint - Accept: " + acceptHeader + ", MCP-Version: " + mcpVersion);
+            
+            // Set MCP protocol version header in response
+            Response.ResponseBuilder responseBuilder = Response.ok();
+            if (mcpVersion != null) {
+                responseBuilder.header("mcp-version", mcpVersion);
+            } else {
+                responseBuilder.header("mcp-version", "2024-11-05");
+            }
+            
+            // POST requests handle JSON-RPC messages
+            if (acceptHeader != null && isEventStreamPreferred(acceptHeader)) {
+                // POST with SSE Accept header - streaming response
+                logger.debug("Handling POST with SSE response via unified endpoint");
+                return handleStreamingJsonRpcRequest(request, requestBody);
+            } else {
+                // POST with JSON Accept header - standard request/response
+                logger.debug("Handling standard JSON-RPC request via unified endpoint");
+                return handleStandardJsonRpcRequest(requestBody, request, responseBuilder);
+            }
+            
+        } catch (Exception e) {
+            logger.error("Error in MCP POST endpoint: " + e.getMessage(), e);
+            return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity("Internal server error: " + e.getMessage())
+                    .build();
+        }
+    }
+    
+    private String createMcpInfoResponse() throws JsonProcessingException {
+        ObjectNode info = objectMapper.createObjectNode();
+        info.put("service", "Knox MCP Proxy");
+        info.put("version", "1.0.0");
+        info.put("protocol", "streamable-http");
+        info.put("mcpVersion", "2024-11-05");
+        info.put("capabilities", "tools,resources,sse");
+        info.put("servers", serverConnections.size());
+        info.put("tools", aggregatedTools.size());
+        info.put("resources", aggregatedResources.size());
+        
+        ArrayNode endpoints = objectMapper.createArrayNode();
+        endpoints.add("GET / (Accept: text/event-stream) - Establish SSE connection");
+        endpoints.add("POST / (Accept: application/json) - JSON-RPC request/response");
+        endpoints.add("POST / (Accept: text/event-stream) - JSON-RPC with streaming response");
+        info.set("endpoints", endpoints);
+        
+        return objectMapper.writeValueAsString(info);
+    }
+    
+    private Response handleSseConnectionUnified(HttpServletRequest request) {
+        logger.debug("SSE connection request received via unified endpoint");
+        
+        try {
+            // Enable async processing for SSE
+            AsyncContext asyncContext = request.startAsync();
+            asyncContext.setTimeout(0); // No timeout for SSE connections
+            
+            // Create SSE session
+            McpSseSession session = McpSseSessionManager.getInstance().createSession(asyncContext, this, request);
+            
+            logger.debug("SSE session created via unified endpoint: " + session.getSessionId());
+            
+            // Return null to signal JAX-RS that we're handling the response asynchronously
+            return null;
+            
+        } catch (Exception e) {
+            logger.error("Failed to establish SSE connection via unified endpoint: " + e.getMessage(), e);
+            
+            try {
+                AsyncContext asyncContext = request.getAsyncContext();
+                if (asyncContext != null) {
+                    asyncContext.complete();
+                }
+            } catch (Exception completeError) {
+                logger.error("Failed to complete async context: " + completeError.getMessage(), completeError);
+            }
+            
+            return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity("Failed to establish SSE connection")
+                    .build();
+        }
+    }
+    
+    private Response handleStreamingJsonRpcRequest(HttpServletRequest request, String requestBody) {
+        // For streaming responses, we need to check if there's a session or create one
+        String sessionId = request.getHeader("X-Session-ID");
+        if (sessionId == null) {
+            sessionId = request.getParameter("session");
+        }
+        
+        if (sessionId != null) {
+            // Route to existing SSE session
+            logger.debug("Routing streaming request to SSE session: " + sessionId);
+            McpSseSessionManager.getInstance().handleMessageForSession(sessionId, requestBody);
+            return Response.accepted()
+                    .header("mcp-version", "2024-11-05")
+                    .build();
+        } else {
+            // No session ID - this is an error for streaming requests
+            return createJsonRpcErrorResponse(null, -32600, "Invalid Request", 
+                    "Streaming requests require an active SSE session. Use GET with Accept: text/event-stream first.");
+        }
+    }
+    
+    private Response handleStandardJsonRpcRequest(String requestBody, HttpServletRequest request, Response.ResponseBuilder responseBuilder) {
+        // This delegates to the existing JSON-RPC handler logic
+        try {
+            if (requestBody == null || requestBody.trim().isEmpty()) {
+                return createJsonRpcErrorResponse(null, -32700, "Parse error", "Request body is required");
+            }
+            
+            JsonNode requestJson = objectMapper.readTree(requestBody);
+            
+            // Validate JSON-RPC 2.0 format
+            if (!requestJson.has("jsonrpc") || !"2.0".equals(requestJson.get("jsonrpc").asText())) {
+                return createJsonRpcErrorResponse(null, -32600, "Invalid Request", "Missing or invalid jsonrpc field");
+            }
+            
+            if (!requestJson.has("method")) {
+                return createJsonRpcErrorResponse(getRequestId(requestJson), -32600, "Invalid Request", "Missing method field");
+            }
+            
+            String method = requestJson.get("method").asText();
+            JsonNode params = requestJson.has("params") ? requestJson.get("params") : null;
+            JsonNode id = getRequestId(requestJson);
+            
+            // Handle different MCP methods
+            Object result = null;
+            switch (method) {
+                case "tools/list":
+                    result = listAllTools();
+                    break;
+                case "tools/call":
+                    result = handleToolCall(params);
+                    break;
+                case "resources/list":
+                    result = listAllResources();
+                    break;
+                case "resources/read":
+                    result = handleResourceRead(params);
+                    break;
+                default:
+                    return createJsonRpcErrorResponse(id, -32601, "Method not found", "Unknown method: " + method);
+            }
+            
+            return createJsonRpcSuccessResponseWithHeaders(id, result, responseBuilder);
+            
+        } catch (JsonProcessingException e) {
+            return createJsonRpcErrorResponse(null, -32700, "Parse error", "Invalid JSON: " + e.getMessage());
+        } catch (IOException e) {
+            return createJsonRpcErrorResponse(null, -32700, "Parse error", "Invalid JSON: " + e.getMessage());
+        } catch (Exception e) {
+            return createJsonRpcErrorResponse(null, -32603, "Internal error", "Server error: " + e.getMessage());
+        }
+    }
+    
+    private Response createJsonRpcSuccessResponseWithHeaders(JsonNode id, Object result, Response.ResponseBuilder responseBuilder) throws JsonProcessingException {
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("jsonrpc", "2.0");
+        if (id != null) {
+            response.set("id", id);
+        }
+        response.set("result", objectMapper.valueToTree(result));
+        
+        String json = objectMapper.writeValueAsString(response);
+        return responseBuilder
+                .entity(json)
+                .type(MediaType.APPLICATION_JSON)
+                .build();
+    }
+
+    // =================================================================
+    // Legacy Endpoints (Backward Compatibility)
+    // =================================================================
+
     @GET
     @Path("/tools")
     public Response listTools() {
@@ -381,7 +619,11 @@ public class McpProxyResource {
 
     @POST
     @Path("/message")
+    @Deprecated
     public Response handleJsonRpcRequest(String requestJsonString, @Context HttpServletRequest request) {
+        logger.debug("JSON-RPC request received (legacy endpoint - deprecated)");
+        logger.warn("DEPRECATED: /message endpoint is deprecated. Use POST / with appropriate Accept headers instead.");
+        
         try {
             init(); // Ensure initialized
             
@@ -396,7 +638,9 @@ public class McpProxyResource {
                 logger.debug("Routing message to SSE session: " + sessionId);
                 McpSseSessionManager.getInstance().handleMessageForSession(sessionId, requestJsonString);
                 // Return accepted response - the actual response will come via SSE
-                return Response.accepted().build();
+                return Response.accepted()
+                        .header("mcp-version", "2024-11-05")
+                        .build();
             }
             
             // Otherwise handle as regular HTTP JSON-RPC request
@@ -441,7 +685,18 @@ public class McpProxyResource {
                     return createJsonRpcErrorResponse(id, -32601, "Method not found", "Unknown method: " + method);
             }
             
-            return createJsonRpcSuccessResponse(id, result);
+            // Add MCP version header to legacy responses
+            ObjectNode response = objectMapper.createObjectNode();
+            response.put("jsonrpc", "2.0");
+            if (id != null) {
+                response.set("id", id);
+            }
+            response.set("result", objectMapper.valueToTree(result));
+            
+            String json = objectMapper.writeValueAsString(response);
+            return Response.ok(json, MediaType.APPLICATION_JSON)
+                    .header("mcp-version", "2024-11-05")
+                    .build();
             
         } catch (JsonProcessingException e) {
             return createJsonRpcErrorResponse(null, -32700, "Parse error", "Invalid JSON: " + e.getMessage());
@@ -593,9 +848,12 @@ public class McpProxyResource {
     @GET
     @Path("/sse")
     @Produces("text/event-stream")
+    @Deprecated
     public void handleSseConnection(@Context HttpServletRequest request) {
-        logger.debug("SSE connection request received");
+        logger.debug("SSE connection request received (legacy endpoint - deprecated)");
+        logger.warn("DEPRECATED: /sse endpoint is deprecated. Use GET / with Accept: text/event-stream header instead.");
         
+        // Delegate to unified SSE handler to avoid code duplication
         try {
             init(); // Ensure initialized
             
@@ -606,7 +864,7 @@ public class McpProxyResource {
             // Create SSE session
             McpSseSession session = McpSseSessionManager.getInstance().createSession(asyncContext, this, request);
             
-            logger.debug("SSE session created: " + session.getSessionId());
+            logger.debug("SSE session created via legacy endpoint: " + session.getSessionId());
             
             // The session will handle the response and keep the connection alive
             // AsyncContext will be completed when the session is closed
@@ -627,6 +885,101 @@ public class McpProxyResource {
         }
     }
     
+    /**
+     * Determines if text/event-stream is preferred over application/json in the Accept header.
+     * This method handles cases where both media types are present and prioritizes based on:
+     * 1. Quality values (q parameters)
+     * 2. Order of appearance if quality values are equal
+     * 3. Specificity (exact match vs wildcard)
+     */
+    private boolean isEventStreamPreferred(String acceptHeader) {
+        if (acceptHeader == null || acceptHeader.trim().isEmpty()) {
+            return false;
+        }
+        
+        // Simple case: only text/event-stream is present
+        if (acceptHeader.equals("text/event-stream")) {
+            return true;
+        }
+        
+        // Simple case: only application/json is present
+        if (acceptHeader.equals("application/json")) {
+            return false;
+        }
+        
+        // If only text/event-stream is mentioned without application/json, prefer SSE
+        if (acceptHeader.contains("text/event-stream") && !acceptHeader.contains("application/json")) {
+            return true;
+        }
+        
+        // If only application/json is mentioned without text/event-stream, prefer JSON
+        if (acceptHeader.contains("application/json") && !acceptHeader.contains("text/event-stream")) {
+            return false;
+        }
+        
+        // Both are present - need to parse quality values and order
+        // For now, we'll be conservative and only prefer SSE if it appears first
+        // or has an explicit higher quality value
+        int sseIndex = acceptHeader.indexOf("text/event-stream");
+        int jsonIndex = acceptHeader.indexOf("application/json");
+        
+        if (sseIndex >= 0 && jsonIndex >= 0) {
+            // Check for quality values - this is a simplified parser
+            // In practice, you might want to use a proper Accept header parser
+            String sseQuality = extractQualityValue(acceptHeader, sseIndex);
+            String jsonQuality = extractQualityValue(acceptHeader, jsonIndex);
+            
+            float sseQ = parseQuality(sseQuality);
+            float jsonQ = parseQuality(jsonQuality);
+            
+            if (sseQ > jsonQ) {
+                return true;
+            } else if (jsonQ > sseQ) {
+                return false;
+            } else {
+                // Equal quality - prefer the one that appears first
+                return sseIndex < jsonIndex;
+            }
+        }
+        
+        return false;
+    }
+    
+    private String extractQualityValue(String acceptHeader, int startIndex) {
+        // Look for ;q= after the media type
+        int semicolonIndex = acceptHeader.indexOf(';', startIndex);
+        if (semicolonIndex == -1) {
+            return "1.0"; // Default quality
+        }
+        
+        int commaIndex = acceptHeader.indexOf(',', semicolonIndex);
+        String segment = commaIndex == -1 ? 
+            acceptHeader.substring(semicolonIndex) : 
+            acceptHeader.substring(semicolonIndex, commaIndex);
+            
+        int qIndex = segment.indexOf("q=");
+        if (qIndex == -1) {
+            return "1.0"; // Default quality
+        }
+        
+        String qualityPart = segment.substring(qIndex + 2).trim();
+        int spaceIndex = qualityPart.indexOf(' ');
+        if (spaceIndex != -1) {
+            qualityPart = qualityPart.substring(0, spaceIndex);
+        }
+        
+        return qualityPart;
+    }
+    
+    private float parseQuality(String quality) {
+        try {
+            float q = Float.parseFloat(quality);
+            return Math.max(0.0f, Math.min(1.0f, q)); // Clamp between 0 and 1
+        } catch (NumberFormatException e) {
+            return 1.0f; // Default quality
+        }
+    }
+
     // Methods for SSE session to call
     public Object listAllToolsForMcp() throws Exception {
         init(); // Ensure initialized

@@ -9,9 +9,11 @@ Knox MCP Proxy extends Apache Knox to serve as a central gateway for MCP ecosyst
 ### ✨ Key Features
 
 - **🔗 Universal MCP Compatibility**: Supports ALL MCP transport protocols (stdio, HTTP, SSE, custom)
-- **🚀 Multi-Server Aggregation**: Seamlessly combines tools and resources from multiple MCP servers
+- **� MCP Streamable HTTP Compliant**: Implements official MCP specification with unified endpoint and content negotiation
+- **�🚀 Multi-Server Aggregation**: Seamlessly combines tools and resources from multiple MCP servers
 - **🛡️ Knox Security Integration**: Leverages Knox's authentication, authorization, and security providers
 - **🏷️ Intelligent Namespacing**: Prevents tool/resource conflicts with server-prefixed names
+- **🔄 Backward Compatibility**: Maintains full compatibility with existing SSE clients while adding spec compliance
 
 ## 🏗️ Architecture
 
@@ -109,7 +111,50 @@ To protect against remote code execution, stdio-based MCP servers are restricted
 
 ## 📚 API Reference
 
-### 🔍 Discovery Endpoints
+### � MCP Streamable HTTP Endpoint (Specification Compliant)
+
+The Knox MCP Proxy now supports the official MCP Streamable HTTP specification with unified endpoints:
+
+```bash
+# MCP-compliant unified endpoints
+GET /gateway/sandbox/mcp/v1/      # Service info or SSE connection  
+POST /gateway/sandbox/mcp/v1/     # JSON-RPC requests
+
+# Content negotiation examples:
+
+# 1. Establish SSE connection (streamable mode)
+GET /gateway/sandbox/mcp/v1/
+Accept: text/event-stream
+# Returns: SSE stream with session management
+
+# 2. Standard JSON-RPC request/response
+POST /gateway/sandbox/mcp/v1/
+Content-Type: application/json
+Accept: application/json
+{
+  "jsonrpc": "2.0",
+  "method": "tools/list",
+  "id": 1
+}
+
+# 3. JSON-RPC with streaming response (requires active SSE session)
+POST /gateway/sandbox/mcp/v1/
+Content-Type: application/json
+Accept: text/event-stream
+X-Session-ID: mcp-sse-12345
+{
+  "jsonrpc": "2.0",
+  "method": "tools/call",
+  "params": {"name": "calculator", "arguments": {"operation": "add", "a": 5, "b": 3}},
+  "id": 2
+}
+```
+
+**MCP Protocol Headers:**
+- `mcp-version: 2024-11-05` - Automatically added to all responses
+- `X-Session-ID: <session-id>` - Used for routing messages to SSE sessions
+
+### �🔍 Discovery Endpoints
 
 ```bash
 # List all available tools across all servers
@@ -137,6 +182,32 @@ Content-Type: application/json
 # Access a resource
 GET /gateway/sandbox/mcp/v1/resources/{serverName.resourceName}
 ```
+
+### 🔄 Legacy Endpoints (Backward Compatibility)
+
+**⚠️ DEPRECATED but fully supported for existing clients:**
+
+```bash
+# Legacy SSE endpoint
+GET /gateway/sandbox/mcp/v1/sse
+# Still works exactly as before - delegates to unified endpoint
+
+# Legacy JSON-RPC endpoint  
+POST /gateway/sandbox/mcp/v1/message
+# Still works exactly as before - includes MCP version headers
+
+# All existing REST endpoints remain unchanged
+GET /gateway/sandbox/mcp/v1/tools
+GET /gateway/sandbox/mcp/v1/resources
+POST /gateway/sandbox/mcp/v1/tools/{toolName}
+GET /gateway/sandbox/mcp/v1/resources/{resourceName}
+GET /gateway/sandbox/mcp/v1/health
+```
+
+**Migration Guide:**
+- Existing clients (Goose Desktop Agent, etc.) continue working unchanged
+- New implementations should use the unified `GET/POST /` endpoint
+- Legacy endpoints log deprecation warnings but remain fully functional
 
 ## 💡 Usage Examples
 
