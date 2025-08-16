@@ -67,20 +67,26 @@ public class McpSseSession {
                           ", contextPath: " + contextPath + 
                           ", servletPath: " + servletPath);
         
-        // The request URI for SSE is something like: /gateway/default/mcp/v1/sse
-        // We want to change it to: /gateway/default/mcp/v1/message?session={sessionId}
+        // The request URI for SSE could be:
+        // - /gateway/mcpservers/mcp/v1/sse (legacy)
+        // - /gateway/mcpservers/mcp/v1/api (new unified)
+        // We want to change it to: /gateway/mcpservers/mcp/v1/message?session={sessionId}
         String baseEndpoint;
         if (requestURI.endsWith("/sse")) {
+            // Legacy SSE endpoint: replace /sse with /message
             baseEndpoint = requestURI.substring(0, requestURI.lastIndexOf("/sse")) + "/message";
+        } else if (requestURI.endsWith("/api")) {
+            // New unified endpoint: replace /api with /message
+            baseEndpoint = requestURI.substring(0, requestURI.lastIndexOf("/api")) + "/message";
         } else {
             // Fallback: construct from known parts
             baseEndpoint = contextPath + servletPath + "/message";
         }
         
-        String messageEndpoint = baseEndpoint + "?session=" + sessionId;
-        System.out.println("DEBUG: Built message endpoint: " + messageEndpoint);
+        String endpointUrl = baseEndpoint + "?session=" + sessionId;
+        System.out.println("DEBUG: Built message endpoint: " + endpointUrl);
         
-        return messageEndpoint;
+        return endpointUrl;
     }
     
     public void sendEvent(String eventType, String data) throws IOException {

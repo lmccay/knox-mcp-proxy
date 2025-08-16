@@ -12,6 +12,7 @@ import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 /**
@@ -25,7 +26,7 @@ public class EndpointDebugTest {
     @Mock
     private HttpHeaders mockHeaders;
     
-    @Mock
+    @Mock   
     private ServletContext mockServletContext;
     
     private McpProxyResource mcpResource;
@@ -150,5 +151,24 @@ public class EndpointDebugTest {
         assertTrue(response.getEntity().toString().contains("Failed to establish SSE connection"));
         
         System.out.println("✅ SSE request test passed (expected failure)");
+    }
+
+    @Test
+    public void debugJerseyEndpointRegistration() {
+        System.out.println("=== DEBUG: Checking Jersey endpoint registration ===");
+        
+        java.lang.reflect.Method[] methods = McpProxyResource.class.getDeclaredMethods();
+        
+        for (java.lang.reflect.Method method : methods) {
+            if (method.isAnnotationPresent(javax.ws.rs.GET.class) || 
+                method.isAnnotationPresent(javax.ws.rs.POST.class)) {
+                
+                String httpMethod = method.isAnnotationPresent(javax.ws.rs.GET.class) ? "GET" : "POST";
+                String path = method.isAnnotationPresent(javax.ws.rs.Path.class) ? 
+                            method.getAnnotation(javax.ws.rs.Path.class).value() : "(root)";
+                
+                System.out.println("JAX-RS endpoint: " + httpMethod + " " + path + " -> " + method.getName());
+            }
+        }
     }
 }
